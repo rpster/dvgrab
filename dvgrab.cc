@@ -76,7 +76,7 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 		m_lockstep_maxdrops( DEFAULT_LOCKSTEP_MAXDROPS ), m_lockstep_totaldrops( DEFAULT_LOCKSTEP_TOTALDROPS ),
 		m_captureActive( false ), m_avc( 0 ), m_reader( 0 ), m_hdv( false ), m_showstatus( false ),
 		m_isLastTimeCodeSet( false ), m_isLastRecDateSet( false ), m_v4l2( false ), m_jvc_p25( false ),
-		m_24p( false ), m_24pa( false ), m_isRecordMode( false ), m_isRewindFirst( false ),
+		m_24p( false ), m_24pa( false ), m_isRecordMode( false ), m_waitRecordStart( false ), m_isRewindFirst( false ),
 		m_timeSplit(0), m_srt( false ), m_isNewFile(false)
 {
 	m_frame = 0;
@@ -85,6 +85,10 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 	m_dst_file_name = NULL;
 
 	getargs( argc, argv );
+
+	// -record-start implies -recordonly
+	if ( m_waitRecordStart )
+		m_isRecordMode = true;
 
 	if ( m_v4l2 )
 	{
@@ -233,6 +237,8 @@ void DVgrab::print_help()
 	cerr << "  -opendml             use the OpenDML extensions to write large (>1GB)" << endl;
 	cerr << "                          'Type 2' DV AVI files (requires -format dv2)" << endl;
 	cerr << "  -r, recordonly       only capture when not paused while in record mode" << endl;
+	cerr << "  -record-start        wait for the device to start recording before capture" << endl;
+	cerr << "                          does not send a play command; implies -recordonly" << endl;
 	cerr << "  -rewind              completely rewind the tape prior to capture" << endl;
 	cerr << "  -showstatus          show the recording status while capturing" << endl;
 	cerr << "  -s, -size number     max file size, 0 = unlimited [default " << DEFAULT_SIZE << "]" << endl;
@@ -349,6 +355,7 @@ void DVgrab::getargs( int argc, char *argv[] )
 		{ "nostop", no_argument, &m_no_stop, true },
 		{ "opendml", no_argument, &m_open_dml, true },
 		{ "recordonly", no_argument, 0, 'r'},
+		{ "record-start", no_argument, 0, 0 },
 		{ "rewind", no_argument, &m_isRewindFirst, true },
 		{ "showstatus", no_argument, &m_showstatus, true },
 		{ "size", required_argument, &m_max_file_size, 0xff },
@@ -432,6 +439,8 @@ void DVgrab::getargs( int argc, char *argv[] )
 					m_input_file_name = "-";
 				else if ( strcmp( "duration", name ) == 0 )
 					m_duration = optarg;
+				else if ( strcmp( "record-start", name ) == 0 )
+					m_waitRecordStart = true;
 			}
 			break;
 		case 'a':
@@ -618,9 +627,26 @@ void DVgrab::startCapture()
 			}
 		}
 
-		// Now Play so we can capture something
-		if ( !g_done )
-			m_avc->Play( m_node );
+		if ( m_waitRecordStart )
+		{
+			// Wait for the device to enter record state on its own
+			sendEvent( "Waiting for device to start recording..." );
+			while ( !g_done &&
+			        AVC1394_MASK_RESPONSE_OPERAND( m_avc->TransportStatus( m_node ), 2 )
+			            != AVC1394_VCR_RESPONSE_TRANSPORT_STATE_RECORD )
+			{
+				timespec t = {0, 125000000L};
+				nanosleep( &t, NULL );
+			}
+			if ( !g_done )
+				sendEvent( "Device recording detected" );
+		}
+		else
+		{
+			// Now Play so we can capture something
+			if ( !g_done )
+				m_avc->Play( m_node );
+		}
 	}
 
 	sendEvent( "Waiting for %s...", m_hdv ? "HDV" : "DV" );

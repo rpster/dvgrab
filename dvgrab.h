@@ -113,6 +113,7 @@ private:
 	int m_srt;
 	bool m_isNewFile;
 	bool m_isRecordMode;
+	bool m_waitRecordStart;
 	int m_isRewindFirst;
 
 	static FileHandler *m_writer;
