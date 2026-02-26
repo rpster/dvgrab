@@ -324,6 +324,15 @@ This is very handy when used with the \fB-autosplit\fP option to automatically
 create a new file for each shot.
 This option requires AV/C and will not work with the \fB-noavc\fP option.
 
+.IP "\fB-record-start\fP" 10
+Wait for the device to enter the record transport state before beginning
+capture. Unlike normal operation, \fBdvgrab\fP does not send a play command
+to the device; instead it polls the transport status and begins capturing
+once it sees AVC1394_VCR_RESPONSE_TRANSPORT_STATE_RECORD.
+This implies \fB-recordonly\fP so that frames are only written while the
+device is actively recording.
+This option requires AV/C and will not work with the \fB-noavc\fP option.
+
 .IP "\fB-rewind\fP" 10
 Rewind the tape completely to the beginning prior to starting capture.
 Naturally, this requires AV/C; however, perhaps not so obvious is that this
