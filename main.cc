@@ -130,8 +130,18 @@ int main( int argc, char *argv[] )
 		{
 			dvgrab.startCapture();
 			while ( !g_done )
+			{
 				if ( dvgrab.done() )
-					break;
+				{
+					dvgrab.stopCapture();
+					if ( !dvgrab.isWaitRecordStart() )
+						break;
+					// Re-arm: wait for the device to record again
+					dvgrab.waitForRecordStart();
+					if ( !g_done )
+						dvgrab.startCapture();
+				}
+			}
 			dvgrab.stopCapture();
 		}
 	}

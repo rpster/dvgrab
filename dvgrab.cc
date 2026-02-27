@@ -238,6 +238,7 @@ void DVgrab::print_help()
 	cerr << "                          'Type 2' DV AVI files (requires -format dv2)" << endl;
 	cerr << "  -r, recordonly       only capture when not paused while in record mode" << endl;
 	cerr << "  -record-start        wait for the device to start recording before capture" << endl;
+	cerr << "                          re-arms after each stop; Ctrl-C to exit" << endl;
 	cerr << "                          does not send a play command; implies -recordonly" << endl;
 	cerr << "  -rewind              completely rewind the tape prior to capture" << endl;
 	cerr << "  -showstatus          show the recording status while capturing" << endl;
@@ -522,6 +523,27 @@ void DVgrab::getargs( int argc, char *argv[] )
 		m_dst_file_name = strdup( "dvgrab-" );
 }
 
+void DVgrab::waitForRecordStart()
+{
+	// Wait for the device to actively record (not paused, not winding).
+	// Check both operand 2 for RECORD state and operand 3 to exclude
+	// RECORD_PAUSE, matching the logic in isPlaying().
+	sendEvent( "Waiting for device to start recording..." );
+	while ( !g_done )
+	{
+		quadlet_t status = m_avc->TransportStatus( m_node );
+		quadlet_t resp2 = AVC1394_MASK_RESPONSE_OPERAND( status, 2 );
+		quadlet_t resp3 = AVC1394_MASK_RESPONSE_OPERAND( status, 3 );
+		if ( resp2 == AVC1394_VCR_RESPONSE_TRANSPORT_STATE_RECORD &&
+		     resp3 != AVC1394_VCR_OPERAND_RECORD_PAUSE )
+			break;
+		timespec t = {0, 125000000L};
+		nanosleep( &t, NULL );
+	}
+	if ( !g_done )
+		sendEvent( "Device recording detected" );
+}
+
 void DVgrab::startCapture()
 {
 	if ( m_dst_file_name )
@@ -628,19 +650,7 @@ void DVgrab::startCapture()
 		}
 
 		if ( m_waitRecordStart )
-		{
-			// Wait for the device to enter record state on its own
-			sendEvent( "Waiting for device to start recording..." );
-			while ( !g_done &&
-			        AVC1394_MASK_RESPONSE_OPERAND( m_avc->TransportStatus( m_node ), 2 )
-			            != AVC1394_VCR_RESPONSE_TRANSPORT_STATE_RECORD )
-			{
-				timespec t = {0, 125000000L};
-				nanosleep( &t, NULL );
-			}
-			if ( !g_done )
-				sendEvent( "Device recording detected" );
-		}
+			waitForRecordStart();
 		else
 		{
 			// Now Play so we can capture something
@@ -1326,7 +1336,18 @@ bool DVgrab::done()
 			     && AVC1394_MASK_OPCODE( m_transportStatus ) == AVC1394_VCR_RESPONSE_TRANSPORT_STATE_WIND )
 			return true;
 		}
-		
+
+		// Stop capture when device leaves active recording state
+		if ( m_waitRecordStart && m_captureActive && m_avc )
+		{
+			m_transportStatus = m_avc->TransportStatus( m_node );
+			quadlet_t resp2 = AVC1394_MASK_RESPONSE_OPERAND( m_transportStatus, 2 );
+			quadlet_t resp3 = AVC1394_MASK_RESPONSE_OPERAND( m_transportStatus, 3 );
+			if ( resp2 != AVC1394_VCR_RESPONSE_TRANSPORT_STATE_RECORD ||
+			     resp3 == AVC1394_VCR_OPERAND_RECORD_PAUSE )
+				return true;
+		}
+
 		timespec t = {0, 125000000L};
 		return ( nanosleep( &t, NULL ) == -1 );
 	}

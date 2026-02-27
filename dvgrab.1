@@ -329,6 +329,10 @@ Wait for the device to enter the record transport state before beginning
 capture. Unlike normal operation, \fBdvgrab\fP does not send a play command
 to the device; instead it polls the transport status and begins capturing
 once it sees AVC1394_VCR_RESPONSE_TRANSPORT_STATE_RECORD.
+When the device leaves the active recording state (for example, the record
+button is pressed again), capture stops and \fBdvgrab\fP returns to waiting
+for the next recording session. Each session is saved to a new file.
+This cycle repeats until interrupted with Ctrl\-C.
 This implies \fB-recordonly\fP so that frames are only written while the
 device is actively recording.
 This option requires AV/C and will not work with the \fB-noavc\fP option.
