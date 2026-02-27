@@ -148,6 +148,11 @@ public:
 	{
 		return m_interactive;
 	}
+	bool isWaitRecordStart()
+	{
+		return m_waitRecordStart;
+	}
+	void waitForRecordStart();
 	bool done();
 	void testCapture( void );
 	static void testCaptureProxy( BusResetHandlerData );
