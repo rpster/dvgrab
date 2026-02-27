@@ -1328,13 +1328,26 @@ bool DVgrab::done()
 {
 	if ( m_reader_active )
 	{
-		// Stop capture at end of tape
+		// Stop capture at end of tape, but only when transitioning
+		// from a play state to wind-stop.  A standalone wind-stop
+		// (e.g. after a rewind or when the device is idle) must not
+		// cause an early exit.
 		if ( !m_interactive && m_writer && m_writer->GetFileSize() > 0 && m_avc && !m_isRecordMode )
 		{
+			static quadlet_t prevDoneStatus = 0;
+			quadlet_t prevStatus = prevDoneStatus;
 			m_transportStatus = m_avc->TransportStatus( m_node );
-			if ( AVC1394_MASK_RESPONSE_OPERAND( m_transportStatus, 3 ) == AVC1394_VCR_OPERAND_WIND_STOP
-			     && AVC1394_MASK_OPCODE( m_transportStatus ) == AVC1394_VCR_RESPONSE_TRANSPORT_STATE_WIND )
-			return true;
+			prevDoneStatus = m_transportStatus;
+
+			bool wasPlaying =
+				AVC1394_MASK_RESPONSE_OPERAND( prevStatus, 2 ) == AVC1394_VCR_RESPONSE_TRANSPORT_STATE_PLAY
+				&& AVC1394_MASK_RESPONSE_OPERAND( prevStatus, 3 ) != AVC1394_VCR_OPERAND_PLAY_FORWARD_PAUSE;
+			bool isWindStop =
+				AVC1394_MASK_RESPONSE_OPERAND( m_transportStatus, 3 ) == AVC1394_VCR_OPERAND_WIND_STOP
+				&& AVC1394_MASK_OPCODE( m_transportStatus ) == AVC1394_VCR_RESPONSE_TRANSPORT_STATE_WIND;
+
+			if ( wasPlaying && isWindStop )
+				return true;
 		}
 
 		// Stop capture when device leaves active recording state

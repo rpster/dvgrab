@@ -395,7 +395,14 @@ done = true:
 bool DVFrame::GetRecordingDate( struct tm &recDate )
 {
 #ifdef HAVE_LIBDV
-	return dv_get_recording_datetime_tm( decoder, ( struct tm * ) &recDate );
+	if ( !dv_get_recording_datetime_tm( decoder, ( struct tm * ) &recDate ) )
+		return false;
+	// libdv may return the raw 2-digit year in tm_year instead of
+	// years-since-1900.  Apply the same century correction as the
+	// non-libdv path: values below 95 are 2000s (need +100 offset).
+	if ( recDate.tm_year < 95 )
+		recDate.tm_year += 100;
+	return true;
 #else
 
 	Pack pack62;
