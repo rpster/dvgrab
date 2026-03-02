@@ -23,10 +23,13 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
+#include <signal.h>
 #include <libavc1394/avc1394.h>
 #include <libavc1394/rom1394.h>
 
 #include "raw1394util.h"
+
+extern volatile sig_atomic_t g_done;
 
 #define MOTDCT_SPEC_ID    0x00005068
 #define DVMCDA1_VENDOR_ID 0x00080046
@@ -126,10 +129,10 @@ int discoverAVC( int* port, octlet_t* guid )
 		m = *port + 1;
 	}
 
-	for ( ; j < m && device == -1; j++ )
+	for ( ; j < m && device == -1 && !g_done; j++ )
 	{
 		handle = raw1394_open( j );
-		for ( i = 0; i < raw1394_get_nodecount( handle ); ++i )
+		for ( i = 0; i < raw1394_get_nodecount( handle ) && !g_done; ++i )
 		{
 			if ( *guid > 1 )
 			{
@@ -148,7 +151,7 @@ int discoverAVC( int* port, octlet_t* guid )
 				{
 					rom1394_free_directory( &rom_dir );
 					fprintf( stderr, "error reading config rom directory for node %d\n", i );
-					continue;
+					break;
 				}
 				if ( ( ( rom1394_get_node_type( &rom_dir ) == ROM1394_NODE_TYPE_AVC ) &&
 				         avc1394_check_subunit_type( handle, i, AVC1394_SUBUNIT_TYPE_VCR ) ) ||
