@@ -333,6 +333,8 @@ When the device leaves the active recording state (for example, the record
 button is pressed again), capture stops and \fBdvgrab\fP returns to waiting
 for the next recording session. Each session is saved to a new file.
 This cycle repeats until interrupted with Ctrl\-C.
+If the device is disconnected during capture, \fBdvgrab\fP waits 5 seconds
+and attempts to reconnect automatically.
 This implies \fB-recordonly\fP so that frames are only written while the
 device is actively recording.
 This option requires AV/C and will not work with the \fB-noavc\fP option.
