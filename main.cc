@@ -112,61 +112,84 @@ int main( int argc, char *argv[] )
 	sigaction( SIGHUP, &sa, NULL );
 	sigaction( SIGPIPE, &sa, NULL );
 
-	try
+	bool retryOnDisconnect = false;
+	while ( !g_done )
 	{
-		char c;
-		DVgrab dvgrab( argc, argv );
+		try
+		{
+			char c;
+			DVgrab dvgrab( argc, argv );
+			retryOnDisconnect = dvgrab.isWaitRecordStart();
 
-		if ( rt_raisepri( 1 ) != 0 )
-			setpriority( PRIO_PROCESS, 0, -20 );
+			if ( rt_raisepri( 1 ) != 0 )
+				setpriority( PRIO_PROCESS, 0, -20 );
 
 #if _POSIX_MEMLOCK > 0
-		mlockall( MCL_CURRENT | MCL_FUTURE );
+			mlockall( MCL_CURRENT | MCL_FUTURE );
 #endif
 
-		if ( dvgrab.isInteractive() )
-		{
-			term_init();
-			fprintf( stderr, "Going interactive. Press '?' for help.\n" );
-			while ( !g_done )
+			if ( dvgrab.isInteractive() )
 			{
-				dvgrab.status( );
-				if ( ( c = term_read() ) != -1 )
-					if ( !dvgrab.execute( c ) )
-						break;
-			}
-			term_exit();
-		}
-		else
-		{
-			dvgrab.startCapture();
-			while ( !g_done )
-			{
-				if ( dvgrab.done() )
+				term_init();
+				fprintf( stderr, "Going interactive. Press '?' for help.\n" );
+				while ( !g_done )
 				{
-					dvgrab.stopCapture();
-					if ( !dvgrab.isWaitRecordStart() )
-						break;
-					// Re-arm: wait for the device to record again
-					dvgrab.waitForRecordStart();
-					if ( !g_done )
-						dvgrab.startCapture();
+					dvgrab.status( );
+					if ( ( c = term_read() ) != -1 )
+						if ( !dvgrab.execute( c ) )
+							break;
 				}
+				term_exit();
+				break;
 			}
-			dvgrab.stopCapture();
+			else
+			{
+				dvgrab.startCapture();
+				while ( !g_done )
+				{
+					if ( dvgrab.done() )
+					{
+						dvgrab.stopCapture();
+						if ( !dvgrab.isWaitRecordStart() )
+							break;
+						// Re-arm: wait for the device to record again
+						dvgrab.waitForRecordStart();
+						if ( !g_done )
+							dvgrab.startCapture();
+					}
+				}
+				dvgrab.stopCapture();
+				break;
+			}
 		}
-	}
-	catch ( std::string s )
-	{
-		fprintf( stderr, "Error: %s\n", s.c_str() );
-		fflush( stderr );
-		ret = 1;
-	}
-	catch ( ... )
-	{
-		fprintf( stderr, "Error: unknown\n" );
-		fflush( stderr );
-		ret = 1;
+		catch ( std::string s )
+		{
+			fprintf( stderr, "Error: %s\n", s.c_str() );
+			fflush( stderr );
+			if ( retryOnDisconnect && !g_done )
+			{
+				fprintf( stderr, "Waiting 5 seconds before retrying...\n" );
+				fflush( stderr );
+				sleep( 5 );
+				continue;
+			}
+			ret = 1;
+			break;
+		}
+		catch ( ... )
+		{
+			fprintf( stderr, "Error: unknown\n" );
+			fflush( stderr );
+			if ( retryOnDisconnect && !g_done )
+			{
+				fprintf( stderr, "Waiting 5 seconds before retrying...\n" );
+				fflush( stderr );
+				sleep( 5 );
+				continue;
+			}
+			ret = 1;
+			break;
+		}
 	}
 
 	fprintf( stderr, "\n" );
