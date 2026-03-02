@@ -240,7 +240,6 @@ void DVgrab::print_help()
 	cerr << "  -r, recordonly       only capture when not paused while in record mode" << endl;
 	cerr << "  -record-start        wait for the device to start recording before capture" << endl;
 	cerr << "                          re-arms after each stop; Ctrl-C to exit" << endl;
-	cerr << "                          retries after 5s if device is disconnected" << endl;
 	cerr << "                          does not send a play command; implies -recordonly" << endl;
 	cerr << "  -rewind              completely rewind the tape prior to capture" << endl;
 	cerr << "  -showstatus          show the recording status while capturing" << endl;
