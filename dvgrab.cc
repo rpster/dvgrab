@@ -35,6 +35,7 @@ using std::endl;
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <signal.h>
 #include <time.h>
 #include <string.h>
 #include <sys/select.h>
@@ -52,7 +53,7 @@ using std::endl;
 #include "v4l2reader.h"
 #include "srt.h"
 
-extern bool g_done;
+extern volatile sig_atomic_t g_done;
 pthread_mutex_t DVgrab::capture_mutex;
 pthread_t DVgrab::capture_thread;
 pthread_t DVgrab::watchdog_thread;

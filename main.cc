@@ -54,10 +54,12 @@ using std::endl;
 #include "dvgrab.h"
 #include "error.h"
 
-bool g_done = false;
+volatile sig_atomic_t g_done = 0;
 
 void signal_handler( int sig )
 {
+	if ( g_done )
+		_exit( EXIT_FAILURE );
 	g_done = true;
 }
 
@@ -96,15 +98,24 @@ int main( int argc, char *argv[] )
 	int ret = 0;
 
 	fcntl( fileno( stderr ), F_SETFL, O_NONBLOCK );
+
+	// Use sigaction without SA_RESTART so that blocked system calls
+	// (e.g. inside libraw1394/libavc1394) return EINTR on signal
+	// delivery instead of being silently restarted.
+	struct sigaction sa;
+	memset( &sa, 0, sizeof( sa ) );
+	sa.sa_handler = signal_handler;
+	sigemptyset( &sa.sa_mask );
+	sa.sa_flags = 0;
+	sigaction( SIGINT, &sa, NULL );
+	sigaction( SIGTERM, &sa, NULL );
+	sigaction( SIGHUP, &sa, NULL );
+	sigaction( SIGPIPE, &sa, NULL );
+
 	try
 	{
 		char c;
 		DVgrab dvgrab( argc, argv );
-
-		signal( SIGINT, signal_handler );
-		signal( SIGTERM, signal_handler );
-		signal( SIGHUP, signal_handler );
-		signal( SIGPIPE, signal_handler );
 
 		if ( rt_raisepri( 1 ) != 0 )
 			setpriority( PRIO_PROCESS, 0, -20 );
