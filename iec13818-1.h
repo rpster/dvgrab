@@ -207,9 +207,11 @@ protected:
 	bool IsHeaderPresent();
 
 private:
-#define MAX_PES_SIZE 1024*1024
-	unsigned char data[MAX_PES_SIZE];
+#define MAX_PES_SIZE (1024*1024)
+#define PES_INITIAL_SIZE (64*1024)
+	unsigned char *data;
 	int length;
+	int capacity;
 
 	int packetDataOffset;
 };

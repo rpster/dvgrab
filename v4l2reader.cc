@@ -265,7 +265,7 @@ bool v4l2Reader::Handler( void )
 		}
 	
 		// Copy the data from V4L2 to dvgrab
-		size_t length = CLAMP( m_buffers[buf.index].length, 0, sizeof( currentFrame->data ) );
+		size_t length = CLAMP( m_buffers[buf.index].length, 0, currentFrame->GetDataCapacity() );
 		memcpy( currentFrame->data, m_buffers[buf.index].start, length );
 		currentFrame->AddDataLen( length );
 		fail_neg( ioctl( VIDIOC_QBUF, &buf ) );
