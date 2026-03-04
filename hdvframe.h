@@ -43,8 +43,9 @@ public:
 	Video video;
 
 #define CARRYOVER_DATA_MAX_SIZE (4 * DATA_BUFFER_LEN)
-	unsigned char carryover_data[CARRYOVER_DATA_MAX_SIZE];
+	unsigned char *carryover_data;
 	int carryover_length;
+	int carryover_capacity;
 
 	int width, height;
 	float frameRate;

@@ -269,7 +269,8 @@ class JPEGHandler: public FileHandler
 private:
 	struct jpeg_error_mgr jerr;
 	struct jpeg_compress_struct cinfo;
-	JSAMPLE image_buffer[ 2048*2048*3 ];
+	JSAMPLE *image_buffer;
+	int image_buffer_size;
 	bool isOpen;
 	string filename;
 	unsigned int count;
@@ -341,9 +342,11 @@ private:
 	void ProcessTSPacket( unsigned char *packet );
 	int writeJVCP25( unsigned char *data, int len );
 #define MPEG2_BUFFER_SIZE (2*1024*1024)
+#define MPEG2_BUFFER_INITIAL_SIZE (64*1024)
 	bool waitingForRecordingDate;
-	unsigned char buffer[MPEG2_BUFFER_SIZE];
+	unsigned char *buffer;
 	int bufferLen;
+	int bufferCapacity;
 	int totalFrames;
 	const unsigned char writerFlags;
 	PayloadList *firstPayloadEntry;
