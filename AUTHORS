@@ -19,6 +19,9 @@ Lars Täuber <lars.taeuber@gmx.net>
 Pelayo Bernedo <bernedo@freenet.de>
 	- srt (subtitle output)
 	- autosplit on recording date/time gap
-
 Nick Radonic
 	- added error precheck on memcopy operation, throws away illformed frames, otherwise the program would crash on old/bad/data/tapes/equipment
+Ramon Cuenco (rpster@gmail.com)
+	- -record-start feature
+	- memory optimizations
+	- 2-digit year handling
