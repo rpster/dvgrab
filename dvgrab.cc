@@ -278,8 +278,8 @@ void DVgrab::print_help()
 	cerr << "  -24pa                remove 2:3:3:2 pulldown for 24p Advanced (Quicktime Only)" << endl;
 #endif
 	cerr << endl;
-	cerr << "Check out the dvgrab website for the latest version, news and other software:" << endl;
-	cerr << "http://www.kinodv.org/" << endl << endl;
+	cerr << "Check out this fork on Github!" << endl;
+	cerr << "https://www.github.com/rpster/dvgrab" << endl << endl;
 }
 
 void DVgrab::set_file_format( char *format )
