@@ -1,7 +1,26 @@
 dvgrab R E L E A S E   N O T E S
 
 -------
-v3.5.1 
+v3.6.0
+-------
+
+* New -record-start option: polls transport status and begins capturing
+  once the device enters record state, re-arms for subsequent sessions.
+  Useful for live camera recording triggered by the camera's Rec button.
+* Optimize memory usage with dynamic buffer allocation (~88% reduction):
+  heap-sized frame buffers, shared dv_decoder_t via refcount, growable
+  PES/HDVStreamParams/Mpeg2Handler buffers, lazy JPEG buffer allocation
+* Fix libdv returning raw 2-digit year in tm_year, causing dates from
+  2025 onwards to display as 1925 (e.g. 1926 instead of 2026)
+* Fix premature exit on wind-stop when no flags are given: require a
+  play-to-wind-stop transition before treating wind-stop as end-of-tape
+* Fix Ctrl+C not terminating process during device discovery: use
+  volatile sig_atomic_t for g_done, switch to sigaction() without
+  SA_RESTART, add immediate _exit() on second Ctrl+C
+* Exit cleanly on device disconnect in -record-start mode
+
+-------
+v3.5.1
 -------
 
 * Fix build with GCC 6.1.0
