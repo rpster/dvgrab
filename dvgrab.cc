@@ -87,6 +87,19 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 
 	getargs( argc, argv );
 
+	// Validate and cap buffer count
+	if ( m_buffers < 1 )
+	{
+		cerr << "Warning: invalid buffer count " << m_buffers << ", using default " << DEFAULT_BUFFERS << endl;
+		m_buffers = DEFAULT_BUFFERS;
+	}
+	if ( m_buffers > MAX_BUFFERS )
+	{
+		cerr << "Warning: buffer count " << m_buffers << " exceeds maximum " << MAX_BUFFERS
+		     << ", capping to " << MAX_BUFFERS << endl;
+		m_buffers = MAX_BUFFERS;
+	}
+
 	// -record-start implies -recordonly
 	if ( m_waitRecordStart )
 		m_isRecordMode = true;
@@ -139,7 +152,7 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 			m_channel = m_connection->GetChannel();
 			sendEvent( "Established connection over channel %d", m_channel );
 		}
-		m_reader = new iec61883Reader( m_port, m_channel, m_buffers, 
+		m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
 			this->testCaptureProxy, this, m_hdv );
 	}
 	else if ( m_v4l2 )
@@ -157,6 +170,12 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 
 	if ( m_reader )
 	{
+		// Report estimated memory usage
+		int frameSize = m_hdv ? DATA_BUFFER_LEN : DV_FRAME_BUFFER_LEN;
+		int totalMB = ( (long long) m_buffers * frameSize ) / ( 1024 * 1024 );
+		sendEvent( "Allocating %d frame buffers (%d KB each, ~%d MB total)",
+			m_buffers, frameSize / 1024, totalMB );
+
 		pthread_create( &capture_thread, NULL, captureThread, this );
 		m_reader->StartThread();
 	}
@@ -186,7 +205,7 @@ void DVgrab::print_help()
 	cerr << "Options:" << endl << endl;
 	cerr << "  -a[n],-autosplit[=n] start a new file when a new recording is detected" << endl;
 	cerr << "                         or if n is supplied, after n seconds gap in recording date/time" << endl;
-	cerr << "  -buffers number      the number of internal frames to buffer [default " << DEFAULT_BUFFERS << "]" << endl;
+	cerr << "  -buffers number      the number of internal frames to buffer [default " << DEFAULT_BUFFERS << ", max " << MAX_BUFFERS << "]" << endl;
 	cerr << "  -card number         card number [default automatic]" << endl;
 	cerr << "  -channel number      iso channel number for listening [default " << DEFAULT_CHANNEL << "]" << endl;
 	cerr << "  -cmincutsize num     min file size in MiB due to collection split [default " << DEFAULT_CMINCUTSIZE << "]" << endl;
@@ -259,8 +278,8 @@ void DVgrab::print_help()
 	cerr << "  -24pa                remove 2:3:3:2 pulldown for 24p Advanced (Quicktime Only)" << endl;
 #endif
 	cerr << endl;
-	cerr << "Check out the dvgrab website for the latest version, news and other software:" << endl;
-	cerr << "http://www.kinodv.org/" << endl << endl;
+	cerr << "Check out this fork on Github!" << endl;
+	cerr << "https://www.github.com/rpster/dvgrab" << endl << endl;
 }
 
 void DVgrab::set_file_format( char *format )

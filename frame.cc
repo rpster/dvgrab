@@ -19,18 +19,33 @@
 
 #include "frame.h"
 
-Frame::Frame()
+#include <stdlib.h>
+#include <string.h>
+
+Frame::Frame( int bufferSize ) : data( NULL ), dataLen( 0 ), dataCapacity( bufferSize )
 {
-	Clear();
+	data = ( unsigned char* ) malloc( dataCapacity );
+	if ( !data )
+	{
+		fprintf( stderr, "ERROR: Failed to allocate %d bytes for frame buffer\n", dataCapacity );
+		exit( 1 );
+	}
 }
 
 Frame::~Frame()
 {
+	free( data );
+	data = NULL;
 }
 
 int Frame::GetDataLen()
 {
 	return dataLen;
+}
+
+int Frame::GetDataCapacity()
+{
+	return dataCapacity;
 }
 
 void Frame::SetDataLen( int len )

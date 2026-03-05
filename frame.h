@@ -60,18 +60,31 @@ TimeCode;
 
 #define DATA_BUFFER_LEN (1024*1024)
 
+// DV frames are 120000 (NTSC) or 144000 (PAL) bytes
+#define DV_PAL_FRAME_SIZE 144000
+#define DV_FRAME_BUFFER_LEN DV_PAL_FRAME_SIZE
+
+// Maximum allowed value for -buffers flag
+#define MAX_BUFFERS 500
+
 class Frame
 {
 public:
-	unsigned char data[ DATA_BUFFER_LEN ];
+	unsigned char *data;
 private:
 	int dataLen;
+	int dataCapacity;
 
 public:
-	Frame();
+	Frame( int bufferSize = DATA_BUFFER_LEN );
 	virtual ~Frame();
 
+	// Prevent copying (buffer is owned)
+	Frame( const Frame& ) = delete;
+	Frame& operator=( const Frame& ) = delete;
+
 	virtual int GetDataLen( void );
+	virtual int GetDataCapacity( void );
 	virtual void SetDataLen( int len );
 	virtual void AddDataLen( int len );
 	virtual void Clear( void );

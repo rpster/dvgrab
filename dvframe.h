@@ -76,6 +76,10 @@ public:
 #ifdef HAVE_LIBDV
 
 	dv_decoder_t *decoder;
+private:
+	static dv_decoder_t *sharedDecoder;
+	static int sharedDecoderRefCount;
+public:
 #endif
 
 	int16_t *audio_buffers[ 4 ];
