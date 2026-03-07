@@ -1,8 +1,7 @@
 /*
 * filehandler.h
 * Copyright (C) 2000 Arne Schirmacher <arne@schirmacher.de>
-* Raw DV, JPEG, and Quicktime portions Copyright (C) 2003-2008 Dan Dennedy <dan@dennedy.org>
-* Portions of Quicktime code borrowed from Arthur Peters' dv_utils.
+* Raw DV and JPEG portions Copyright (C) 2003-2008 Dan Dennedy <dan@dennedy.org>
 *
 * This program is free software; you can redistribute it and/or modify
 * it under the terms of the GNU General Public License as published by
@@ -22,7 +21,7 @@
 #ifndef _FILEHANDLER_H
 #define _FILEHANDLER_H
 
-enum { PAL_FORMAT, NTSC_FORMAT, AVI_DV1_FORMAT, AVI_DV2_FORMAT, QT_FORMAT, RAW_FORMAT, DIF_FORMAT, JPEG_FORMAT, MPEG2TS_FORMAT, UNDEFINED };
+enum { PAL_FORMAT, NTSC_FORMAT, AVI_DV1_FORMAT, AVI_DV2_FORMAT, RAW_FORMAT, DIF_FORMAT, JPEG_FORMAT, MPEG2TS_FORMAT, UNDEFINED };
 
 #include <vector>
 using std::vector;
@@ -219,44 +218,6 @@ protected:
 	DVINFO dvinfo;
 	FOURCC fccHandler;
 };
-
-#ifdef HAVE_LIBQUICKTIME
-#include <quicktime.h>
-
-class QtHandler: public FileHandler
-{
-public:
-	QtHandler();
-	~QtHandler();
-
-	bool FileIsOpen();
-	bool Create( const string& filename );
-	int Write( Frame *frame );
-	int Close();
-	off_t GetFileSize();
-	int GetTotalFrames();
-	bool Open( const char *s );
-	int GetFrame( Frame *frame, int frameNum );
-
-private:
-	quicktime_t *fd;
-	long samplingRate;
-	int samplesPerBuffer;
-	int channels;
-
-	bool isFullyInitialized;
-
-	unsigned int audioBufferSize;
-	int16_t *audioBuffer;
-	short int** audioChannelBuffer;
-	short int* audioChannelBuffers[ 4 ];
-
-	void Init();
-	inline void DeinterlaceStereo16( void* pInput, int iBytes, void* pLOutput, void* pROutput );
-
-};
-#endif
-
 
 #if defined(HAVE_LIBJPEG) && defined(HAVE_LIBDV)
 extern "C"

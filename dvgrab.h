@@ -107,8 +107,6 @@ private:
 	bool m_isLastRecDateSet;
 	bool m_v4l2;
 	int m_jvc_p25;
-	int m_24p;
-	int m_24pa;
 	int m_timeSplit;
 	int m_srt;
 	bool m_isNewFile;

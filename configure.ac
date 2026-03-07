@@ -1,6 +1,6 @@
 dnl Process this file with autoconf to produce a configure script.
 AC_PREREQ(2.69)
-AC_INIT(dvgrab, 3.6.0)
+AC_INIT(dvgrab, 3.6.1)
 AM_INIT_AUTOMAKE
 AM_CONFIG_HEADER(config.h)
 AM_MAINTAINER_MODE
@@ -37,7 +37,7 @@ AC_CHECK_LIB(pthread, pthread_create,,
 ])
 
 # LIBDV
-AC_ARG_WITH(libdv, [  --with-libdv  Enables libdv support for JPEG output], [enable_libdv=$withval], [enable_libdv=yes])
+AC_ARG_WITH(libdv, [  --with-libdv  Enables libdv support for JPEG output], [enable_libdv=$withval], [enable_libdv=yes])
 if test "$enable_libdv" = yes; then
 	PKG_CHECK_MODULES(LIBDV, libdv >= 0.103,
 			[
@@ -49,42 +49,8 @@ if test "$enable_libdv" = yes; then
 	)
 fi
 
-# LIBQUICKTIME
-AC_ARG_WITH(libquicktime, [  --with-libquicktime  Enables Quicktime support], [enable_libquicktime=$withval], [enable_libquicktime=yes])
-if test "$enable_libquicktime" = yes; then
-	PKG_CHECK_MODULES(LIBQUICKTIME, [libquicktime >= 0.9.5],
-	[
-		AC_DEFINE(HAVE_LIBQUICKTIME, 1, [libquicktime.sourceforge.net present])
-		AC_SUBST(LIBQUICKTIME_CFLAGS)
-		AC_SUBST(LIBQUICKTIME_LIBS)
-	],[
-		AC_CHECK_HEADERS(quicktime/quicktime.h,
-		[
-			LIBQUICKTIME_CFLAGS="-I$prefix/include/quicktime"
-			AC_CHECK_LIB(quicktime, quicktime_open,
-			[
-				LIBQUICKTIME_LIBS="-lquicktime"
-				AC_DEFINE(HAVE_LIBQUICKTIME, 1, [Heroine Virtual Quicktime4Linux present])
-			],[
-				AC_CHECK_LIB(quicktimehv, quicktime_open,
-				[
-					LIBQUICKTIME_LIBS="-lquicktimehv"
-					AC_DEFINE(HAVE_LIBQUICKTIME, 1, [cvs.cinelerra.org Quicktime4Linux present])
-				],[
-					AC_WARN([libquicktime missing; install libquicktime or quicktime4linux to support Quicktime files.])
-				])
-			])
-		],[
-			AC_WARN($LIBQUICKTIME_PKG_ERRORS)
-			AC_WARN([libquicktime missing; install libquicktime or quicktime4linux to support Quicktime files.])
-		])
-	])
-fi
-AC_SUBST(LIBQUICKTIME_CFLAGS)
-AC_SUBST(LIBQUICKTIME_LIBS)
-
 # LIBJPEG
-AC_ARG_WITH(libjpeg, [  --with-libjpeg  Enables JPEG support], [enable_libjpeg=$withval], [enable_libjpeg=yes])
+AC_ARG_WITH(libjpeg, [  --with-libjpeg  Enables JPEG support], [enable_libjpeg=$withval], [enable_libjpeg=yes])
 if test "$enable_libjpeg" = yes; then
 	AC_CHECK_HEADERS(jpeglib.h,,
 	[

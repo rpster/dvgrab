@@ -18,15 +18,13 @@ AM_CPPFLAGS =	\
 	@LIBRAW1394_CFLAGS@ \
 	@LIBAVC1394_CFLAGS@ \
 	@LIBIEC61883_CFLAGS@ \
-	@LIBDV_CFLAGS@ \
-	@LIBQUICKTIME_CFLAGS@
+	@LIBDV_CFLAGS@
 
 dvgrab_LDADD = \
 	@LIBRAW1394_LIBS@ \
 	@LIBAVC1394_LIBS@ \
 	@LIBIEC61883_LIBS@ \
-	@LIBDV_LIBS@ \
-	@LIBQUICKTIME_LIBS@
+	@LIBDV_LIBS@
 
 #riffdump_SOURCES = error.cc error.h riffdump.cc avi.h riff.h avi.cc riff.cc dvframe.h dvframe.cc frame.h
 

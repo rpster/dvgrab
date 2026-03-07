@@ -1,6 +1,14 @@
 dvgrab R E L E A S E   N O T E S
 
 -------
+v3.6.1
+-------
+
+* Remove libquicktime (QuickTime/MOV) support. libquicktime upstream has been
+  dead since 2012 (last release 1.2.4) and distros are dropping support.
+  Users needing MOV output can pipe dvgrab raw DV output to FFmpeg.
+  The -24p and -24pa options (QuickTime-only) are also removed.
+* Update project URLs from SourceForge/kinodv.org to GitHub
 v3.6.0
 -------
 
