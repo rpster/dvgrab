@@ -19,9 +19,11 @@
 */
 
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include "hdvframe.h"
 
-HDVFrame::HDVFrame( HDVStreamParams *p )
+HDVFrame::HDVFrame( HDVStreamParams *p ) : Frame( DATA_BUFFER_LEN )
 {
 	Clear();
 
@@ -244,6 +246,24 @@ void HDVFrame::ProcessVideo()
 			sendEvent( "\aERROR: too much carryover data (%d bytes), DROPPING DATA!\n", params->carryover_length );
 			params->carryover_length = CARRYOVER_DATA_MAX_SIZE;
 		}
+		// Grow carryover buffer if needed
+		if ( params->carryover_length > params->carryover_capacity )
+		{
+			int new_cap = params->carryover_length * 2;
+			if ( new_cap > CARRYOVER_DATA_MAX_SIZE )
+				new_cap = CARRYOVER_DATA_MAX_SIZE;
+			unsigned char *new_buf = ( unsigned char* ) realloc( params->carryover_data, new_cap );
+			if ( !new_buf )
+			{
+				sendEvent( "\aERROR: Failed to grow carryover buffer to %d bytes\n", new_cap );
+				params->carryover_length = params->carryover_capacity;
+			}
+			else
+			{
+				params->carryover_data = new_buf;
+				params->carryover_capacity = new_cap;
+			}
+		}
 		memcpy( params->carryover_data, &data[lastDataLen], params->carryover_length );
 		Frame::SetDataLen( lastDataLen );
 
@@ -338,6 +358,9 @@ void HDVFrame::SetComplete()
 ///////////////////
 /// HDVStreamParams
 
+// Initial carryover capacity: 8 KB (typically only a few KB needed)
+#define CARRYOVER_INITIAL_SIZE (8 * 1024)
+
 HDVStreamParams::HDVStreamParams() :
 	program_map_PID( 0 ),
 	video_stream_PID( 0 ),
@@ -345,13 +368,23 @@ HDVStreamParams::HDVStreamParams() :
 	sony_private_a0_PID( 0 ),
 	sony_private_a1_PID( 0 ),
 	width( 0 ), height( 0 ), frameRate( 0 ),
+	carryover_data( NULL ),
 	carryover_length( 0 ),
+	carryover_capacity( CARRYOVER_INITIAL_SIZE ),
 	isRecordingDateSet( false ),
 	isTimeCodeSet( false ),
 	isGOPTimeCodeSet( false )
 {
+	carryover_data = ( unsigned char* ) malloc( carryover_capacity );
+	if ( !carryover_data )
+	{
+		fprintf( stderr, "ERROR: Failed to allocate carryover buffer\n" );
+		exit( 1 );
+	}
 }
 
 HDVStreamParams::~HDVStreamParams()
 {
+	free( carryover_data );
+	carryover_data = NULL;
 }

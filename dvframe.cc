@@ -33,6 +33,11 @@
 VideoInfo::VideoInfo() : width( 0 ), height( 0 ), isPAL( false )
 {}
 
+#ifdef HAVE_LIBDV
+dv_decoder_t *DVFrame::sharedDecoder = NULL;
+int DVFrame::sharedDecoderRefCount = 0;
+#endif
+
 #ifndef HAVE_LIBDV
 bool DVFrame::maps_initialized = false;
 int DVFrame::palmap_ch1[ 2000 ];
@@ -56,16 +61,21 @@ short DVFrame::compmap[ 4096 ];
  
 */
 
-DVFrame::DVFrame()
+DVFrame::DVFrame() : Frame( DV_FRAME_BUFFER_LEN )
 {
 #ifdef HAVE_LIBDV
 
-	decoder = dv_decoder_new( 0, 0, 0 );
-	decoder->quality = DV_QUALITY_BEST;
-	decoder->audio->arg_audio_emphasis = 2;
-	dv_set_audio_correction ( decoder, DV_AUDIO_CORRECT_AVERAGE );
-	FILE* libdv_log = fopen( "/dev/null", "w" );
-	dv_set_error_log( decoder, libdv_log );
+	if ( !sharedDecoder )
+	{
+		sharedDecoder = dv_decoder_new( 0, 0, 0 );
+		sharedDecoder->quality = DV_QUALITY_BEST;
+		sharedDecoder->audio->arg_audio_emphasis = 2;
+		dv_set_audio_correction ( sharedDecoder, DV_AUDIO_CORRECT_AVERAGE );
+		FILE* libdv_log = fopen( "/dev/null", "w" );
+		dv_set_error_log( sharedDecoder, libdv_log );
+	}
+	sharedDecoderRefCount++;
+	decoder = sharedDecoder;
 #else
 
 	if ( maps_initialized == false )
@@ -130,7 +140,14 @@ DVFrame::DVFrame()
 DVFrame::~DVFrame()
 {
 #ifdef HAVE_LIBDV
-	dv_decoder_free( decoder );
+	sharedDecoderRefCount--;
+	if ( sharedDecoderRefCount <= 0 )
+	{
+		dv_decoder_free( sharedDecoder );
+		sharedDecoder = NULL;
+		sharedDecoderRefCount = 0;
+	}
+	decoder = NULL;
 #endif
 
 	for ( int n = 0; n < 4; n++ )

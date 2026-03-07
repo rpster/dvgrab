@@ -829,6 +829,7 @@ bool AVIHandler::GetOpenDML()
 
 JPEGHandler::JPEGHandler( int quality, bool deinterlace, int width, int height,
                           bool overwrite, string temp, bool usetemp ) :
+		image_buffer( NULL ), image_buffer_size( 0 ),
 		isOpen( false ), count( 0 ), deinterlace( deinterlace ), overwrite( overwrite )
 {
 	extension = ".jpg";
@@ -842,6 +843,17 @@ JPEGHandler::JPEGHandler( int quality, bool deinterlace, int width, int height,
 	new_width = CLAMP( width, -1, 2048 );
 	this->temp=temp;
 	this->usetemp=usetemp;
+
+	// Allocate image buffer based on requested dimensions, or default DV size
+	int buf_w = ( new_width > 0 ) ? new_width : FRAME_MAX_WIDTH;
+	int buf_h = ( new_height > 0 ) ? new_height : FRAME_MAX_HEIGHT;
+	image_buffer_size = buf_w * buf_h * 3;
+	image_buffer = ( JSAMPLE* ) malloc( image_buffer_size );
+	if ( !image_buffer )
+	{
+		fprintf( stderr, "ERROR: Failed to allocate %d bytes for JPEG buffer\n", image_buffer_size );
+		exit( 1 );
+	}
 }
 
 
@@ -849,6 +861,8 @@ JPEGHandler::~JPEGHandler()
 {
 	Close();
 	jpeg_destroy_compress( &cinfo );
+	free( image_buffer );
+	image_buffer = NULL;
 }
 
 bool JPEGHandler::Create( const string& filename )
@@ -1056,7 +1070,8 @@ int JPEGHandler::Close( void )
 
 
 Mpeg2Handler::Mpeg2Handler( unsigned char flags, const string& ext ) :
-	fd( -1 ), waitingForRecordingDate( true ), bufferLen( 0 ), totalFrames( 0 ),
+	fd( -1 ), waitingForRecordingDate( true ), buffer( NULL ), bufferLen( 0 ),
+	bufferCapacity( 0 ), totalFrames( 0 ),
 	writerFlags( flags ), firstPayloadEntry( NULL )
 {
 	extension = ext;
@@ -1069,7 +1084,9 @@ Mpeg2Handler::~Mpeg2Handler()
 	    next = firstPayloadEntry->next;
 	    free( firstPayloadEntry );
 	    firstPayloadEntry = next;
-	}	
+	}
+	free( buffer );
+	buffer = NULL;
 	Close();
 }
 
@@ -1101,6 +1118,25 @@ bool Mpeg2Handler::WriteFrame( Frame *frame )
 		{
 			if ( bufferLen + frame->GetDataLen() < MPEG2_BUFFER_SIZE )
 			{
+				// Grow buffer if needed (lazy allocation)
+				int needed = bufferLen + frame->GetDataLen();
+				if ( needed > bufferCapacity )
+				{
+					int new_cap = bufferCapacity ? bufferCapacity * 2 : MPEG2_BUFFER_INITIAL_SIZE;
+					while ( new_cap < needed )
+						new_cap *= 2;
+					if ( new_cap > MPEG2_BUFFER_SIZE )
+						new_cap = MPEG2_BUFFER_SIZE;
+					unsigned char *new_buf = ( unsigned char* ) realloc( buffer, new_cap );
+					if ( !new_buf )
+					{
+						fprintf( stderr, "ERROR: Failed to grow MPEG2 buffer\n" );
+						waitingForRecordingDate = false;
+						return FileHandler::WriteFrame( frame );
+					}
+					buffer = new_buf;
+					bufferCapacity = new_cap;
+				}
 				// Buffer up the first several frames until we get the recording date
 				memcpy( &buffer[bufferLen], frame->data, frame->GetDataLen() );
 				bufferLen += frame->GetDataLen();

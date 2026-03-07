@@ -21,6 +21,8 @@
 using std::string;
 
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 #include "hdvframe.h"
 #include "iec13818-1.h"
@@ -470,19 +472,43 @@ void PMT::Dump()
 /////////////
 // PES Packet
 
-PES::PES()
+PES::PES() : data( NULL ), length( 0 ), capacity( PES_INITIAL_SIZE ), packetDataOffset( -1 )
 {
-	Clear();
+	data = ( unsigned char* ) malloc( capacity );
+	if ( !data )
+	{
+		fprintf( stderr, "ERROR: Failed to allocate PES buffer\n" );
+		exit( 1 );
+	}
 }
 
 PES::~PES()
 {
+	free( data );
+	data = NULL;
 }
 
 void PES::AddData( unsigned char *d, int l )
 {
 	if ( length + l < MAX_PES_SIZE )
 	{
+		// Grow buffer if needed
+		if ( length + l > capacity )
+		{
+			int new_cap = capacity * 2;
+			while ( new_cap < length + l )
+				new_cap *= 2;
+			if ( new_cap > MAX_PES_SIZE )
+				new_cap = MAX_PES_SIZE;
+			unsigned char *new_buf = ( unsigned char* ) realloc( data, new_cap );
+			if ( !new_buf )
+			{
+				fprintf( stderr, "PES buffer realloc failed!\n" );
+				return;
+			}
+			data = new_buf;
+			capacity = new_cap;
+		}
 		memcpy( &data[length], d, l );
 		length += l;
 	}

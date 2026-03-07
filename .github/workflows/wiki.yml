@@ -1,0 +1,42 @@
+# .github/workflows/wiki.yml
+name: Publish Wiki
+
+on:
+  push:
+    branches: [master]
+    paths: ['wiki/**']
+  pull_request:
+    paths: ['wiki/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Clone wiki and sync pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.wiki.git" wiki-repo
+
+          # Sync wiki files (delete removed pages, add new ones)
+          rsync -av --delete --exclude='.git' wiki/ wiki-repo/
+
+          cd wiki-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Only commit and push if there are changes
+          if git diff --quiet && git diff --staged --quiet; then
+            echo "No wiki changes to publish."
+          else
+            git add -A
+            git commit -m "Update wiki from repo (${GITHUB_SHA::7})"
+            git push
+          fi

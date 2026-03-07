@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build (amd64)
+        if: matrix.arch == 'amd64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf automake pkg-config \
+            libraw1394-dev \
+            libavc1394-dev \
+            libiec61883-dev \
+            libdv4-dev \
+            libjpeg-dev \
+            linux-libc-dev
+          autoreconf -fi
+          ./configure --without-libquicktime
+          make -j$(nproc)
+
+      - name: Build (arm64)
+        if: matrix.arch == 'arm64'
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}:/src" \
+            -w /src \
+            ubuntu:24.04 bash -c '
+              apt-get update &&
+              apt-get install -y \
+                autoconf automake pkg-config gcc g++ make \
+                libraw1394-dev \
+                libavc1394-dev \
+                libiec61883-dev \
+                libdv4-dev \
+                libjpeg-dev \
+                linux-libc-dev &&
+              autoreconf -fi &&
+              ./configure --without-libquicktime &&
+              make -j$(nproc)
+            '
+
+      - name: Package binary
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF_NAME#v}
+          else
+            VERSION=dev
+          fi
+          mkdir -p dvgrab-${VERSION}-linux-${{ matrix.arch }}
+          cp dvgrab dvgrab-${VERSION}-linux-${{ matrix.arch }}/
+          cp README COPYING dvgrab.1 dvgrab-${VERSION}-linux-${{ matrix.arch }}/
+          tar czf dvgrab-${VERSION}-linux-${{ matrix.arch }}.tar.gz dvgrab-${VERSION}-linux-${{ matrix.arch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dvgrab-linux-${{ matrix.arch }}
+          path: dvgrab-*.tar.gz
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create source tarball
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake pkg-config \
+            libraw1394-dev libavc1394-dev libiec61883-dev \
+            libdv4-dev libjpeg-dev linux-libc-dev
+          autoreconf -fi
+          ./configure --without-libquicktime
+          make dist
+        continue-on-error: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dvgrab-*.tar.gz
