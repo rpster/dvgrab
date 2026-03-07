@@ -24,9 +24,6 @@
 /* Define to 1 if you have the `pthread' library (-lpthread). */
 #undef HAVE_LIBPTHREAD
 
-/* libquicktime.sourceforge.net present */
-#undef HAVE_LIBQUICKTIME
-
 /* Define to 1 if you have the <linux/videodev2.h> header file. */
 #undef HAVE_LINUX_VIDEODEV2_H
 
@@ -35,9 +32,6 @@
 
 /* Define to 1 if you have the `mktime' function. */
 #undef HAVE_MKTIME
-
-/* Define to 1 if you have the <quicktime/quicktime.h> header file. */
-#undef HAVE_QUICKTIME_QUICKTIME_H
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H

@@ -168,10 +168,10 @@ XXX[.Y]h, XXX[.Y]min, XXX[.Y][s], XXXms,
 This option tells \fBdvgrab\fP to
 write every \fIn\fP'th frame only (default all frames).
  
-.IP "\fB-f, -format \fIdv1\fP | \fIdv2\fP | \fIavi\fP | \fIraw\fP | \fIdif\fP | \fIqt\fP | \fImov\fP | \fIjpeg\fP | \fIjpg\fP | \fImpeg2\fP | \fIhdv\fP\fP" 10
+.IP "\fB-f, -format \fIdv1\fP | \fIdv2\fP | \fIavi\fP | \fIraw\fP | \fIdif\fP | \fIjpeg\fP | \fIjpg\fP | \fImpeg2\fP | \fIhdv\fP\fP" 10
 Specifies the format of the output file(s). File format can also be determined
 if you include an extension on the \fIbase\fP name. The following extensions
-are recognizable: avi, dv, dif, mov, jpg, jpeg, and m2t (HDV).
+are recognizable: avi, dv, dif, jpg, jpeg, and m2t (HDV).
 
 .IP "" 10
 \fIdv1\fP and  
@@ -193,9 +193,6 @@ are read by a number of GNU/Linux tools as well as Apple Quicktime.
 \fIdif\fP is a variation of raw DV that names files with a .dif extension
 so they can be more immediately loaded into MainConcept MainActor5.
  
-.IP "" 10
-\fIqt\fP is Quicktime, but requires that dvgrab be compiled with libquicktime.
-
 .IP "" 10
 \fIjpg\fP or \fIjpeg\fP is for a sequence of JPEG image files if dvgrab was compiled with
 libdv and jpeglib. This option can only be used with a DV input, not HDV (MPEG2-TS).
@@ -384,16 +381,6 @@ to set a different device file.
  
 .IP "\fB-v, -version\fP" 10
 Show version of program.
-
-.IP "\fB-24p\fP" 10
-For Quicktime DV, set the frame rate as 24 fps in the Quicktime file.
-This only works as expected when the video has been shot in 24p mode.
-
-.IP "\fB-24pa\fP" 10
-For Quicktime, DV, in addition to setting the frame rate to 24 in the Quicktime
-file, also reverse the 2:3:3:2 pulldown process by removing the interlaced "C"
-frame. This only works as expected when the video has been shot in 24p Advanced
-mode. See http://www.adamwilt.com/24p/
 
 .SH "EXAMPLES"
 

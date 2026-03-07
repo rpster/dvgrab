@@ -77,7 +77,7 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 		m_lockstep_maxdrops( DEFAULT_LOCKSTEP_MAXDROPS ), m_lockstep_totaldrops( DEFAULT_LOCKSTEP_TOTALDROPS ),
 		m_captureActive( false ), m_avc( 0 ), m_reader( 0 ), m_hdv( false ), m_showstatus( false ),
 		m_isLastTimeCodeSet( false ), m_isLastRecDateSet( false ), m_v4l2( false ), m_jvc_p25( false ),
-		m_24p( false ), m_24pa( false ), m_isRecordMode( false ), m_waitRecordStart( false ), m_isRewindFirst( false ),
+		m_isRecordMode( false ), m_waitRecordStart( false ), m_isRewindFirst( false ),
 		m_timeSplit(0), m_srt( false ), m_isNewFile(false)
 {
 	m_frame = 0;
@@ -204,9 +204,6 @@ void DVgrab::print_help()
 	cerr << "              dif         raw DV file with a .dif extension" << endl;
 	cerr << "              dv1         'Type 1' DV AVI file" << endl;
 	cerr << "              dv2, avi    'Type 2' DV AVI file" << endl;
-#ifdef HAVE_LIBQUICKTIME
-	cerr << "              qt, mov     QuickTime DV movie" << endl;
-#endif
 	cerr << "              mpeg2, hdv  MPEG-2 transport stream (HDV)" << endl;
 #if defined(HAVE_LIBJPEG) && defined(HAVE_LIBDV)
 	cerr << "              jpeg, jpg   sequence of JPEG files (DV only)" << endl;
@@ -254,10 +251,6 @@ void DVgrab::print_help()
 	cerr << "                          use -input to set device file [default " << DEFAULT_V4L2_DEVICE << "]" << endl;
 #endif
 	cerr << "  -v, -version         display version and exit" << endl;
-#ifdef HAVE_LIBQUICKTIME
-	cerr << "  -24p                 use 24 fps as output rate (Quicktime Only)" << endl;
-	cerr << "  -24pa                remove 2:3:3:2 pulldown for 24p Advanced (Quicktime Only)" << endl;
-#endif
 	cerr << endl;
 	cerr << "Check out the dvgrab website for the latest version, news and other software:" << endl;
 	cerr << "http://www.kinodv.org/" << endl << endl;
@@ -271,8 +264,6 @@ void DVgrab::set_file_format( char *format )
 		m_file_format = AVI_DV2_FORMAT;
 	else if ( strcmp( "raw", format ) == 0 )
 		m_file_format = RAW_FORMAT;
-	else if ( strcmp( "qt", format ) == 0 || strcmp( "mov", format ) == 0 )
-		m_file_format = QT_FORMAT;
 	else if ( strcmp( "dif", format ) == 0 )
 		m_file_format = DIF_FORMAT;
 #if defined(HAVE_LIBJPEG) && defined(HAVE_LIBDV)
@@ -302,8 +293,6 @@ void DVgrab::set_format_from_name( void )
 			m_file_format = RAW_FORMAT;
 		else if ( ext == "DIF" )
 			m_file_format = DIF_FORMAT;
-		else if ( ext == "MOV" )
-			m_file_format = QT_FORMAT;
 		else if ( ext == "JPG" || ext == "JPEG" )
 			m_file_format = JPEG_FORMAT;
 		else if ( ext == "M2T" )
@@ -368,10 +357,6 @@ void DVgrab::getargs( int argc, char *argv[] )
 		{ "timesys", no_argument, &m_timesys, true },
 #ifdef HAVE_LINUX_VIDEODEV2_H
 		{ "v4l2", no_argument, 0, 'V' },
-#endif
-#ifdef HAVE_LIBQUICKTIME
-		{ "24p", no_argument, &m_24p, true },
-		{ "24pa", no_argument, &m_24pa, true },
 #endif
 		{ "version", no_argument, 0, 'v' },
 		{ 0, 0, 0, 0 }
@@ -579,14 +564,6 @@ void DVgrab::startCapture()
 				aviWriter->SetOpenDML( m_open_dml );
 				break;
 			}
-
-#ifdef HAVE_LIBQUICKTIME
-		case QT_FORMAT:
-			m_writer = new QtHandler();
-			m_writer->SetFilmRate( m_24p );
-			m_writer->SetRemove2332( m_24pa );
-			break;
-#endif
 
 #if defined(HAVE_LIBJPEG) && defined(HAVE_LIBDV)
 		case JPEG_FORMAT:

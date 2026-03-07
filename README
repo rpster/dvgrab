@@ -3,8 +3,7 @@ dvgrab
 (C) 2002-2008 Dan Dennedy <dan@dennedy.org>
 (C) 2007 Dan Streetman <ddstreet@ieee.org>
 
-dvgrab website: http://www.kinodv.org/
-dvgrab cvs: http://sourceforge.net/projects/kino/
+dvgrab website: https://github.com/rpster/dvgrab
 
 To use the program, turn on the camera, press play, and run the program:
 
@@ -19,7 +18,29 @@ should be included with your hardware).
 
 Read the man page for more documentation or 'dvgrab --help'.
 Please submit bug reports, fixes, or suggestions to
-http://sourceforge.net/tracker/?atid=114103&group_id=14103
-or access the discussion forum at
-http://www.kinodv.org/
+https://github.com/rpster/dvgrab/issues
 Be sure to read the NEWS file for very helpful release notes.
+
+Dependencies
+============
+
+Required:
+  libraw1394 >= 1.1.0
+  libavc1394 >= 0.5.1
+  libiec61883 >= 1.0.0
+  pthread
+
+Optional:
+  libdv >= 0.103     (improved dv2 AVI audio, required for JPEG output)
+  libjpeg            (JPEG still image output, also requires libdv)
+  V4L2 headers       (USB UVC device support)
+
+Output Formats
+==============
+
+  raw  (.dv)   - Raw DV stream (default)
+  dif  (.dif)  - Raw DV stream (DIF naming for MainActor5)
+  dv1  (.avi)  - AVI Type 1 (integrated DV track)
+  dv2  (.avi)  - AVI Type 2 (separate audio track)
+  jpeg (.jpeg) - Sequence of JPEG images (requires libdv + libjpeg)
+  hdv  (.m2t)  - MPEG-2 Transport Stream (HDV)
