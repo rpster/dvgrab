@@ -60,9 +60,20 @@ TimeCode;
 
 #define DATA_BUFFER_LEN (1024*1024)
 
-// DV frames are 120000 (NTSC) or 144000 (PAL) bytes
-#define DV_PAL_FRAME_SIZE 144000
-#define DV_FRAME_BUFFER_LEN DV_PAL_FRAME_SIZE
+// DV25 (DV/DVCAM/DVCPRO) frames: 120000 (NTSC) or 144000 (PAL)
+#define DV_NTSC_FRAME_SIZE    120000
+#define DV_PAL_FRAME_SIZE     144000
+
+// DVCPRO50 frames: double the DIF sequences
+#define DVCPRO50_NTSC_FRAME_SIZE  240000
+#define DVCPRO50_PAL_FRAME_SIZE   288000
+
+// DVCPRO HD (100 Mbps) frames: quadruple the DIF sequences
+#define DVCPROHD_NTSC_FRAME_SIZE  480000
+#define DVCPROHD_PAL_FRAME_SIZE   576000
+
+// Buffer must accommodate the largest possible DV frame
+#define DV_FRAME_BUFFER_LEN DVCPROHD_PAL_FRAME_SIZE
 
 // Maximum allowed value for -buffers flag
 #define MAX_BUFFERS 500

@@ -618,15 +618,43 @@ bool DVFrame::GetVideoInfo( VideoInfo &info )
 }
 
 
+/** gets the Application Profile Type from the DIF header
+
+    The APT field is in byte 4, bits 0-2 of the first DIF block.
+    APT values:
+      0 = DV25 (DV, DVCAM, DVCPRO)
+      1 = DVCPRO50
+      4 = DVCPRO HD (100 Mbps)
+
+    \return the APT value (0, 1, or 4 for known formats) */
+
+int DVFrame::GetAPT( void )
+{
+	return data[ 4 ] & 0x07;
+}
+
+
 /** gets the size of the frame
- 
-    Depending on the type (PAL or NTSC) of the frame, the length of the frame is returned 
- 
+
+    Depending on the DV profile (DV25, DVCPRO50, DVCPRO HD) and
+    system (PAL or NTSC), the length of the frame is returned.
+
     \return the length of the frame in Bytes */
 
 int DVFrame::GetFrameSize( void )
 {
-	return IsPAL() ? 144000 : 120000;
+	int apt = GetAPT();
+	bool pal = IsPAL();
+
+	switch ( apt )
+	{
+	case 1:  // DVCPRO50
+		return pal ? DVCPRO50_PAL_FRAME_SIZE : DVCPRO50_NTSC_FRAME_SIZE;
+	case 4:  // DVCPRO HD
+		return pal ? DVCPROHD_PAL_FRAME_SIZE : DVCPROHD_NTSC_FRAME_SIZE;
+	default: // DV25 (DV, DVCAM, DVCPRO)
+		return pal ? DV_PAL_FRAME_SIZE : DV_NTSC_FRAME_SIZE;
+	}
 }
 
 

@@ -114,6 +114,7 @@ public:
 	bool GetAudioInfo( AudioInfo &info );
 	bool GetVideoInfo( VideoInfo &info );
 	int GetFrameSize( void );
+	int GetAPT( void );
 	bool IsPAL( void );
 	int ExtractAudio( void *sound );
 	void ExtractHeader( void );
