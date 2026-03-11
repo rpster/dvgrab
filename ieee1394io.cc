@@ -537,24 +537,30 @@ int iec61883Reader::Handler( unsigned char *data, int length, int dropped )
 		}
 	}
 
-    //  BOUNDS CHECKING FOR DV FRAMES ONLY 
+    //  BOUNDS CHECKING FOR DV FRAMES ONLY
 	if (!currentFrame->IsHDV())
 	{
 		int currentLen = currentFrame->GetDataLen();
-		int maxFrameSize = static_cast<DVFrame*>(currentFrame)->GetFrameSize();
-		
-		if (currentLen + length > maxFrameSize)
+		// When the frame is empty, the DV header hasn't been written yet,
+		// so GetFrameSize() cannot determine PAL vs NTSC correctly.
+		// Use the actual buffer capacity instead; once data is present,
+		// use the tighter format-aware frame size.
+		int maxLen = (currentLen == 0)
+			? currentFrame->GetDataCapacity()
+			: static_cast<DVFrame*>(currentFrame)->GetFrameSize();
+
+		if (currentLen + length > maxLen)
 		{
 			// Buffer would overflow - drop this packet and reset frame
 			fprintf(stderr, "ERROR: Frame buffer overflow prevented! "
 					"current=%d, incoming=%d, max=%d\n",
-					currentLen, length, maxFrameSize);
-			
+					currentLen, length, maxLen);
+
 			// Reset the frame to prevent corruption
 			currentFrame->Clear();
 			badFrames++;
 			droppedFrames++;
-			
+
 			// Don't attempt the memcpy
 			return 0;
 		}
