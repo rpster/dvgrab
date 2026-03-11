@@ -35,6 +35,7 @@ dvgrab -v4l2 myfilm-
 
 ## Wiki Contents
 
+- [Kernel Setup](Kernel-Setup) -- Building a custom kernel with FireWire support
 - [Installation](Installation) -- Dependencies, building, and installing
 - [Usage Guide](Usage-Guide) -- Command-line options and examples
 - [Output Formats](Output-Formats) -- Supported file formats in detail
