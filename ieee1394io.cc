@@ -318,8 +318,10 @@ iec61883Reader::iec61883Reader( int p, int c, int bufSize,
 	m_rawIsoMode = false;
 	m_rawIsoHandle = NULL;
 	m_rawIsoFrameBuf = NULL;
+	m_rawIsoBufCapacity = 0;
 	m_rawIsoFrameSize = 0;
 	m_rawIsoFrameOffset = 0;
+	m_rawIsoAlignOffset = -1;
 	m_rawIsoSynced = false;
 }
 
@@ -545,64 +547,104 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 
 	unsigned char *payload = data + 8;
 
-	// Accumulate payload data and deliver a complete frame every
-	// m_rawIsoFrameSize bytes.
-	if ( self->m_rawIsoFrameOffset + payloadLen >= self->m_rawIsoFrameSize )
+	// Append payload to accumulation buffer
+	if ( self->m_rawIsoFrameOffset + payloadLen > self->m_rawIsoBufCapacity )
 	{
-		int remaining = self->m_rawIsoFrameSize - self->m_rawIsoFrameOffset;
-		if ( remaining > 0 )
-			memcpy( self->m_rawIsoFrameBuf + self->m_rawIsoFrameOffset,
-				payload, remaining );
+		// Buffer overflow — should not happen, reset
+		self->m_rawIsoFrameOffset = 0;
+		return RAW1394_ISO_OK;
+	}
+	memcpy( self->m_rawIsoFrameBuf + self->m_rawIsoFrameOffset,
+		payload, payloadLen );
+	self->m_rawIsoFrameOffset += payloadLen;
 
-		// Diagnostic: scan first completed frame for DIF structure
-		static bool dumpedOnce = false;
-		if ( !dumpedOnce )
+	// Phase 1: Find DIF frame alignment by scanning for the
+	// FSC=1→FSC=0 transition at a header boundary (SCT=0).
+	if ( self->m_rawIsoAlignOffset < 0 )
+	{
+		// Need at least one full frame to scan
+		if ( self->m_rawIsoFrameOffset < self->m_rawIsoFrameSize )
+			return RAW1394_ISO_OK;
+
+		// Scan for header blocks and find FSC transitions
+		int prevFsc = -1;
+		int alignOff = -1;
+		for ( int off = 0; off + 80 <= self->m_rawIsoFrameOffset;
+			off += 80 )
 		{
-			dumpedOnce = true;
-			fprintf( stderr, "DIF scan of first %d-byte frame:\n",
-				self->m_rawIsoFrameSize );
-			int headerCount = 0;
-			for ( int off = 0; off + 80 <= self->m_rawIsoFrameSize;
+			int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
+			if ( sct == 0 )
+			{
+				int fsc = ( self->m_rawIsoFrameBuf[off+1] >> 7 ) & 1;
+				if ( prevFsc == 1 && fsc == 0 )
+				{
+					alignOff = off;
+					break;
+				}
+				prevFsc = fsc;
+			}
+		}
+
+		if ( alignOff >= 0 )
+		{
+			self->m_rawIsoAlignOffset = alignOff;
+			fprintf( stderr, "DIF frame alignment: offset=%d bytes "
+				"(%d DIF blocks)\n", alignOff, alignOff / 80 );
+
+			// Shift data so the frame starts at alignOff
+			int remaining = self->m_rawIsoFrameOffset - alignOff;
+			if ( remaining > 0 )
+				memmove( self->m_rawIsoFrameBuf,
+					self->m_rawIsoFrameBuf + alignOff, remaining );
+			self->m_rawIsoFrameOffset = remaining;
+		}
+		else
+		{
+			// No FSC transition found — fall back to first header
+			for ( int off = 0; off + 80 <= self->m_rawIsoFrameOffset;
 				off += 80 )
 			{
 				int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
-				int dsn = self->m_rawIsoFrameBuf[off] & 0xF;
 				if ( sct == 0 )
 				{
-					int fsc = ( self->m_rawIsoFrameBuf[off+1] >> 7 ) & 1;
-					int apt = self->m_rawIsoFrameBuf[off+4] & 7;
-					fprintf( stderr, "  Header at %6d: ID0=0x%02x "
-						"DSN=%d FSC=%d APT=%d\n", off,
-						self->m_rawIsoFrameBuf[off], dsn, fsc, apt );
-					if ( ++headerCount >= 10 )
-					{
-						fprintf( stderr, "  ... (more headers)\n" );
-						break;
-					}
+					alignOff = off;
+					break;
 				}
 			}
-			if ( headerCount == 0 )
-				fprintf( stderr, "  No header blocks (SCT=0) found!\n" );
+			if ( alignOff >= 0 )
+			{
+				self->m_rawIsoAlignOffset = alignOff;
+				fprintf( stderr, "DIF frame alignment (header): "
+					"offset=%d bytes\n", alignOff );
+				int remaining = self->m_rawIsoFrameOffset - alignOff;
+				if ( remaining > 0 )
+					memmove( self->m_rawIsoFrameBuf,
+						self->m_rawIsoFrameBuf + alignOff,
+						remaining );
+				self->m_rawIsoFrameOffset = remaining;
+			}
+			else
+			{
+				// No headers at all — use fixed-size (no alignment)
+				self->m_rawIsoAlignOffset = 0;
+				fprintf( stderr, "DIF frame alignment: no headers "
+					"found, using unaligned\n" );
+			}
 		}
+	}
 
+	// Phase 2: Deliver aligned frames
+	while ( self->m_rawIsoFrameOffset >= self->m_rawIsoFrameSize )
+	{
 		self->Handler( self->m_rawIsoFrameBuf,
 			self->m_rawIsoFrameSize, 0 );
 
-		// Start next frame with leftover data
-		self->m_rawIsoFrameOffset = 0;
-		int leftover = payloadLen - remaining;
-		if ( leftover > 0 && leftover <= self->m_rawIsoFrameSize )
-		{
-			memcpy( self->m_rawIsoFrameBuf, payload + remaining,
-				leftover );
-			self->m_rawIsoFrameOffset = leftover;
-		}
-	}
-	else
-	{
-		memcpy( self->m_rawIsoFrameBuf + self->m_rawIsoFrameOffset,
-			payload, payloadLen );
-		self->m_rawIsoFrameOffset += payloadLen;
+		int remaining = self->m_rawIsoFrameOffset - self->m_rawIsoFrameSize;
+		if ( remaining > 0 )
+			memmove( self->m_rawIsoFrameBuf,
+				self->m_rawIsoFrameBuf + self->m_rawIsoFrameSize,
+				remaining );
+		self->m_rawIsoFrameOffset = remaining;
 	}
 
 	return RAW1394_ISO_OK;
@@ -736,8 +778,10 @@ bool iec61883Reader::StartReceive()
 		else
 			m_rawIsoFrameSize = pal ? DVCPRO50_PAL_FRAME_SIZE
 				: DVCPRO50_NTSC_FRAME_SIZE;
-		m_rawIsoFrameBuf = new unsigned char[ m_rawIsoFrameSize ];
+		m_rawIsoBufCapacity = m_rawIsoFrameSize * 2;
+		m_rawIsoFrameBuf = new unsigned char[ m_rawIsoBufCapacity ];
 		m_rawIsoFrameOffset = 0;
+		m_rawIsoAlignOffset = -1;
 		m_rawIsoSynced = false;
 		m_rawIsoMode = true;
 

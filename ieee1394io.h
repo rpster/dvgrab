@@ -134,8 +134,10 @@ private:
 	bool m_rawIsoMode;
 	raw1394handle_t m_rawIsoHandle;
 	unsigned char *m_rawIsoFrameBuf;
+	int m_rawIsoBufCapacity;
 	int m_rawIsoFrameSize;
 	int m_rawIsoFrameOffset;
+	int m_rawIsoAlignOffset;
 	bool m_rawIsoSynced;
 
 public:
