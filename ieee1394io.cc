@@ -545,34 +545,28 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 
 	unsigned char *payload = data + 8;
 
-	// Accumulate payload data into frame buffer.
-	// Deliver a complete frame every m_rawIsoFrameSize bytes.
-	if ( self->m_rawIsoFrameOffset + payloadLen >= self->m_rawIsoFrameSize )
+	// DIF block ID byte 0:
+	//   bits 7-5: Section Type (SCT) - 0=Header
+	//   bit  4:   Arbitrary
+	//   bits 3-0: DIF Sequence Number (DSN)
+	// A new frame starts with Header section (SCT=0), sequence 0 (DSN=0)
+	int sectionType = ( payload[0] >> 5 ) & 0x7;
+	int sequenceNum = payload[0] & 0xF;
+
+	if ( sectionType == 0 && sequenceNum == 0 )
 	{
-		// Fill remaining bytes to complete the frame
-		int remaining = self->m_rawIsoFrameSize - self->m_rawIsoFrameOffset;
-		if ( remaining > 0 )
-			memcpy( self->m_rawIsoFrameBuf + self->m_rawIsoFrameOffset,
-				payload, remaining );
-
-		if ( rawCallCount <= 10 )
-			fprintf( stderr, "  Delivering frame: %d bytes "
-				"(pkt #%d)\n", self->m_rawIsoFrameSize, rawCallCount );
-
-		self->Handler( self->m_rawIsoFrameBuf,
-			self->m_rawIsoFrameSize, 0 );
-
-		// Start next frame with leftover data
-		self->m_rawIsoFrameOffset = 0;
-		int leftover = payloadLen - remaining;
-		if ( leftover > 0 && leftover <= self->m_rawIsoFrameSize )
+		// Frame boundary: deliver the previous frame if we have one
+		if ( self->m_rawIsoSynced && self->m_rawIsoFrameOffset > 0 )
 		{
-			memcpy( self->m_rawIsoFrameBuf, payload + remaining,
-				leftover );
-			self->m_rawIsoFrameOffset = leftover;
+			self->Handler( self->m_rawIsoFrameBuf,
+				self->m_rawIsoFrameOffset, 0 );
 		}
+		self->m_rawIsoFrameOffset = 0;
+		self->m_rawIsoSynced = true;
 	}
-	else
+
+	if ( self->m_rawIsoSynced &&
+		self->m_rawIsoFrameOffset + payloadLen <= self->m_rawIsoFrameSize )
 	{
 		memcpy( self->m_rawIsoFrameBuf + self->m_rawIsoFrameOffset,
 			payload, payloadLen );
