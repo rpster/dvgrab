@@ -631,35 +631,19 @@ iec61883Connection::iec61883Connection( int port, int node ) :
 	{
 		m_channel = iec61883_cmp_connect( m_handle, m_node, &m_outputPort,
 			raw1394_get_local_id( m_handle ), &m_inputPort, &m_bandwidth );
-		if ( m_channel >= 0 )
+		if ( m_channel >= 0 && m_bandwidth > 0 )
 		{
-			// Verify the connection actually took effect by reading
-			// back the oPCR.  iec61883_cmp_connect can return a
-			// channel even when IRM allocation fails, but without
-			// actually modifying the device's oPCR.
-			static const nodeaddr_t OPCR0_ADDR = CSR_REGISTER_BASE + 0x904;
-			quadlet_t oPCR0 = 0;
-			if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
-				sizeof( oPCR0 ), &oPCR0 ) == 0 )
-			{
-				quadlet_t value = ntohl( oPCR0 );
-				int p2pCount = ( value >> 24 ) & 0x3F;
-				if ( p2pCount > 0 )
-				{
-					m_cmpConnected = true;
-				}
-				else
-				{
-					fprintf( stderr, "CMP returned channel %d but oPCR shows "
-						"no active connection, forcing oPCR\n", m_channel );
-					m_channel = ForceConnection();
-				}
-			}
-			else
-			{
-				// Can't verify — assume it worked.
-				m_cmpConnected = true;
-			}
+			// CMP fully succeeded (channel allocated and bandwidth reserved).
+			m_cmpConnected = true;
+		}
+		else if ( m_channel >= 0 )
+		{
+			// CMP returned a channel but failed to allocate bandwidth
+			// (IRM unavailable).  The oPCR may not have been modified.
+			// Force a known-good connection.
+			fprintf( stderr, "CMP returned channel %d but no bandwidth "
+				"allocated, forcing oPCR\n", m_channel );
+			m_channel = ForceConnection();
 		}
 		else
 		{
@@ -689,43 +673,39 @@ int iec61883Connection::ForceConnection( void )
 	//   bits  1-0     : payload
 
 	static const nodeaddr_t OPCR0_ADDR = CSR_REGISTER_BASE + 0x904;
-	int channel = -1;
+	int channel = 63;
 
 	quadlet_t oPCR0 = 0;
 	if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
 		sizeof( oPCR0 ), &oPCR0 ) != 0 )
 	{
 		fprintf( stderr, "CMP connect failed, could not read oPCR, "
-			"falling back to channel 63\n" );
-		return 63;
+			"falling back to channel %d\n", channel );
+		return channel;
 	}
 
 	quadlet_t value = ntohl( oPCR0 );
 	m_originaloPCR = oPCR0;
 
-	int p2pCount = ( value >> 24 ) & 0x3F;
-	int bcastConn = ( value >> 30 ) & 0x01;
+	fprintf( stderr, "oPCR[0] = 0x%08x (online=%d, bcast=%d, p2p=%d, "
+		"channel=%d, rate=%d)\n", value,
+		( value >> 31 ) & 1, ( value >> 30 ) & 1,
+		( value >> 24 ) & 0x3F, ( value >> 10 ) & 0x3F,
+		( value >> 8 ) & 0x3 );
 
-	if ( p2pCount > 0 || bcastConn )
-	{
-		// An existing connection is active — use its channel.
-		channel = ( value >> 10 ) & 0x3F;
-		fprintf( stderr, "CMP connect failed, using existing oPCR channel %d\n",
-			channel );
-		return channel;
-	}
-
-	// No existing connection — force one by incrementing the p2p
-	// connection counter and setting channel 63 in the oPCR via
-	// compare-and-swap.
-	channel = 63;
+	// Always force a fresh connection on channel 63, regardless of
+	// existing oPCR state.  Any existing connection from a failed
+	// CMP attempt is likely stale and not actually streaming.
 	quadlet_t newValue = value;
 	// Set online bit
 	newValue |= ( 1u << 31 );
-	// Increment p2p connection count (bits 29-24) by 1
+	// Set p2p connection count to 1
 	newValue = ( newValue & ~( 0x3Fu << 24 ) ) | ( 1u << 24 );
-	// Set channel (bits 15-10)
+	// Set channel to 63
 	newValue = ( newValue & ~( 0x3Fu << 10 ) ) | ( ( channel & 0x3F ) << 10 );
+
+	fprintf( stderr, "Writing oPCR[0] = 0x%08x (channel=%d, p2p=1)\n",
+		newValue, channel );
 
 	// raw1394_lock takes host byte order values
 	if ( raw1394_lock( m_handle, m_node, OPCR0_ADDR,
@@ -733,24 +713,51 @@ int iec61883Connection::ForceConnection( void )
 		newValue, value, &oPCR0 ) == 0 && oPCR0 == value )
 	{
 		m_forcedoPCR = true;
-		fprintf( stderr, "CMP connect failed, forced oPCR connection on channel %d\n",
-			channel );
+		fprintf( stderr, "Forced oPCR connection on channel %d\n", channel );
 	}
 	else
 	{
-		// Compare-swap failed — the register changed underneath us.
-		// Re-read to see if someone else set up a connection.
+		fprintf( stderr, "oPCR compare-swap failed (expected 0x%08x, "
+			"got 0x%08x), retrying\n", value, oPCR0 );
+
+		// Compare-swap failed — oPCR changed between read and swap.
+		// Re-read and retry once.
 		if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
 			sizeof( oPCR0 ), &oPCR0 ) == 0 )
 		{
 			value = ntohl( oPCR0 );
-			p2pCount = ( value >> 24 ) & 0x3F;
-			bcastConn = ( value >> 30 ) & 0x01;
-			if ( p2pCount > 0 || bcastConn )
-				channel = ( value >> 10 ) & 0x3F;
+			m_originaloPCR = oPCR0;
+
+			newValue = value;
+			newValue |= ( 1u << 31 );
+			newValue = ( newValue & ~( 0x3Fu << 24 ) ) | ( 1u << 24 );
+			newValue = ( newValue & ~( 0x3Fu << 10 ) ) | ( ( channel & 0x3F ) << 10 );
+
+			if ( raw1394_lock( m_handle, m_node, OPCR0_ADDR,
+				RAW1394_EXTCODE_COMPARE_SWAP,
+				newValue, value, &oPCR0 ) == 0 && oPCR0 == value )
+			{
+				m_forcedoPCR = true;
+				fprintf( stderr, "Forced oPCR connection on channel %d (retry)\n",
+					channel );
+			}
+			else
+			{
+				fprintf( stderr, "oPCR retry also failed, trying channel %d anyway\n",
+					channel );
+			}
 		}
-		fprintf( stderr, "CMP connect failed, oPCR compare-swap failed, "
-			"trying channel %d\n", channel );
+	}
+
+	// Verify the oPCR was actually written
+	if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
+		sizeof( oPCR0 ), &oPCR0 ) == 0 )
+	{
+		value = ntohl( oPCR0 );
+		fprintf( stderr, "oPCR[0] after write = 0x%08x (online=%d, p2p=%d, "
+			"channel=%d)\n", value,
+			( value >> 31 ) & 1, ( value >> 24 ) & 0x3F,
+			( value >> 10 ) & 0x3F );
 	}
 
 	return channel;
