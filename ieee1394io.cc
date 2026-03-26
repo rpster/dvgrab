@@ -65,6 +65,7 @@ using std::endl;
 #include <time.h>
 #include <sys/time.h>
 #include <string.h>
+#include <arpa/inet.h>
 
 #include <libavc1394/avc1394.h>
 #include <libavc1394/avc1394_vcr.h>
@@ -622,15 +623,50 @@ void* iec61883Reader::Thread()
 
 iec61883Connection::iec61883Connection( int port, int node ) :
 	m_node( node | 0xffc0 ), m_channel( -1 ), m_bandwidth( 0 ),
-	m_outputPort( -1 ), m_inputPort( -1 )
+	m_outputPort( -1 ), m_inputPort( -1 ), m_cmpConnected( false )
 {
 	m_handle = raw1394_new_handle_on_port( port );
 	if ( m_handle )
 	{
 		m_channel = iec61883_cmp_connect( m_handle, m_node, &m_outputPort,
 			raw1394_get_local_id( m_handle ), &m_inputPort, &m_bandwidth );
-		if ( m_channel < 0 )
-			m_channel = 63;
+		if ( m_channel >= 0 )
+		{
+			m_cmpConnected = true;
+		}
+		else
+		{
+			// CMP connect failed - try to read the device's output Plug
+			// Control Register (oPCR[0]) to find an existing connection's
+			// channel before falling back to channel 63.
+			quadlet_t oPCR0 = 0;
+			// oPCR[0] is at CSR register offset 0x904
+			if ( raw1394_read( m_handle, m_node, CSR_REGISTER_BASE + 0x904,
+				sizeof( oPCR0 ), &oPCR0 ) == 0 )
+			{
+				quadlet_t value = ntohl( oPCR0 );
+				int p2pCount = ( value >> 24 ) & 0x3F;
+				int bcastConn = ( value >> 30 ) & 0x01;
+				if ( p2pCount > 0 || bcastConn )
+				{
+					m_channel = ( value >> 10 ) & 0x3F;
+					fprintf( stderr, "CMP connect failed, using existing oPCR channel %d\n",
+						m_channel );
+				}
+				else
+				{
+					m_channel = 63;
+					fprintf( stderr, "CMP connect failed, no existing connections in oPCR, "
+						"falling back to channel %d\n", m_channel );
+				}
+			}
+			else
+			{
+				m_channel = 63;
+				fprintf( stderr, "CMP connect failed, could not read oPCR, "
+					"falling back to channel %d\n", m_channel );
+			}
+		}
 	}
 }
 
@@ -638,9 +674,12 @@ iec61883Connection::~iec61883Connection( )
 {
 	if ( m_handle )
 	{
-		iec61883_cmp_disconnect( m_handle, m_node, m_outputPort,
-			raw1394_get_local_id (m_handle), m_inputPort,
-			m_channel, m_bandwidth );
+		if ( m_cmpConnected )
+		{
+			iec61883_cmp_disconnect( m_handle, m_node, m_outputPort,
+				raw1394_get_local_id (m_handle), m_inputPort,
+				m_channel, m_bandwidth );
+		}
 		raw1394_destroy_handle( m_handle );
 	}
 }

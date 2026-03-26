@@ -165,6 +165,7 @@ private:
 	int m_bandwidth;
 	int m_outputPort;
 	int m_inputPort;
+	bool m_cmpConnected;
 
 public:
 
