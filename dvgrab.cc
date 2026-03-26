@@ -128,7 +128,10 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 	pthread_mutex_init( &capture_mutex, NULL );
 	if ( m_port != -1 )
 	{
-		iec61883Connection::CheckConsistency( m_port, m_node );
+		// Skip CheckConsistency (iec61883_cmp_normalize_output) — it
+		// attempts to reset the device's oPCR which can fail and disrupt
+		// the bus when IRM is unavailable.  The subsequent CMP connect
+		// or ForceConnection handles connection setup.
 
 		if ( ! m_noavc )
 		{
@@ -652,7 +655,14 @@ void DVgrab::startCapture()
 		{
 			// Now Play so we can capture something
 			if ( !g_done )
+			{
 				m_avc->Play( m_node );
+				// Give the device time to start, then check status
+				timespec t = {0, 250000000L};
+				nanosleep( &t, NULL );
+				quadlet_t status = m_avc->TransportStatus( m_node );
+				sendEvent( "AVC transport status: 0x%08x", status );
+			}
 		}
 	}
 
