@@ -477,8 +477,26 @@ rawIsoHandler( raw1394handle_t handle, unsigned char *data,
 	int *counter = static_cast< int* >( raw1394_get_userdata( handle ) );
 	( *counter )++;
 	if ( *counter == 1 )
+	{
 		fprintf( stderr, "  Raw iso packet: channel=%d len=%u tag=%d "
 			"cycle=%u\n", channel, len, tag, cycle );
+		// Dump CIP header (first 8 bytes) if present
+		if ( len >= 8 && tag == 1 )
+		{
+			unsigned char fmt = data[4] & 0x3F;
+			unsigned char fdf = data[5];
+			int dbs = data[1];
+			int fn  = ( data[2] >> 6 ) & 0x3;
+			int sph = ( data[2] >> 2 ) & 1;
+			fprintf( stderr, "  CIP: DBS=%d FN=%d SPH=%d FMT=0x%02x "
+				"FDF=0x%02x\n", dbs, fn, sph, fmt, fdf );
+			// Dump first 16 bytes hex
+			fprintf( stderr, "  Hex:" );
+			for ( unsigned int b = 0; b < 16 && b < len; b++ )
+				fprintf( stderr, " %02x", data[b] );
+			fprintf( stderr, "\n" );
+		}
+	}
 	return RAW1394_ISO_OK;
 }
 
