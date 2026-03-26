@@ -527,27 +527,8 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 	static int rawCallCount = 0;
 	rawCallCount++;
 	if ( rawCallCount == 1 )
-	{
-		fprintf( stderr, "RawDvIsoHandler: first call, len=%u tag=%d "
-			"channel=%d cycle=%u\n", len, tag, channel, cycle );
-		if ( len >= 16 )
-		{
-			fprintf( stderr, "  Data:" );
-			for ( unsigned int b = 0; b < 16; b++ )
-				fprintf( stderr, " %02x", data[b] );
-			fprintf( stderr, "\n" );
-		}
-	}
-	if ( rawCallCount <= 5 && len > 8 && tag == 1 )
-	{
-		unsigned char *payload = data + 8;
-		int sct = ( payload[0] >> 5 ) & 0x7;
-		int dsn = payload[0] & 0xF;
-		int dbn = payload[1];
-		fprintf( stderr, "  pkt#%d: len=%u payload[0]=0x%02x "
-			"payload[1]=0x%02x SCT=%d DSN=%d DBN=0x%02x\n",
-			rawCallCount, len, payload[0], payload[1], sct, dsn, dbn );
-	}
+		fprintf( stderr, "RawDvIsoHandler: receiving data, len=%u "
+			"channel=%d\n", len, channel );
 
 	// Need CIP header (tag=1) with payload
 	if ( tag != 1 || len <= 8 )
@@ -564,31 +545,34 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 
 	unsigned char *payload = data + 8;
 
-	// DIF block ID byte 0:
-	//   bits 7-5: Section Type (SCT) - 0=Header
-	//   bit  4:   Arbitrary (reserved)
-	//   bits 3-0: DIF Sequence Number (DSN)
-	// A new frame starts with Header section (SCT=0), sequence 0 (DSN=0)
-	int sectionType = ( payload[0] >> 5 ) & 0x7;
-	int sequenceNum = payload[0] & 0xF;
-
-	if ( sectionType == 0 && sequenceNum == 0 )
+	// Accumulate payload data into frame buffer.
+	// Deliver a complete frame every m_rawIsoFrameSize bytes.
+	if ( self->m_rawIsoFrameOffset + payloadLen >= self->m_rawIsoFrameSize )
 	{
-		// Frame boundary: deliver the previous frame if we have one
-		if ( self->m_rawIsoSynced && self->m_rawIsoFrameOffset > 0 )
-		{
-			if ( rawCallCount <= 1000 )
-				fprintf( stderr, "  Delivering frame: %d bytes\n",
-					self->m_rawIsoFrameOffset );
-			self->Handler( self->m_rawIsoFrameBuf,
-				self->m_rawIsoFrameOffset, 0 );
-		}
-		self->m_rawIsoFrameOffset = 0;
-		self->m_rawIsoSynced = true;
-	}
+		// Fill remaining bytes to complete the frame
+		int remaining = self->m_rawIsoFrameSize - self->m_rawIsoFrameOffset;
+		if ( remaining > 0 )
+			memcpy( self->m_rawIsoFrameBuf + self->m_rawIsoFrameOffset,
+				payload, remaining );
 
-	if ( self->m_rawIsoSynced &&
-		self->m_rawIsoFrameOffset + payloadLen <= self->m_rawIsoFrameSize )
+		if ( rawCallCount <= 10 )
+			fprintf( stderr, "  Delivering frame: %d bytes "
+				"(pkt #%d)\n", self->m_rawIsoFrameSize, rawCallCount );
+
+		self->Handler( self->m_rawIsoFrameBuf,
+			self->m_rawIsoFrameSize, 0 );
+
+		// Start next frame with leftover data
+		self->m_rawIsoFrameOffset = 0;
+		int leftover = payloadLen - remaining;
+		if ( leftover > 0 && leftover <= self->m_rawIsoFrameSize )
+		{
+			memcpy( self->m_rawIsoFrameBuf, payload + remaining,
+				leftover );
+			self->m_rawIsoFrameOffset = leftover;
+		}
+	}
+	else
 	{
 		memcpy( self->m_rawIsoFrameBuf + self->m_rawIsoFrameOffset,
 			payload, payloadLen );
