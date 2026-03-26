@@ -545,26 +545,53 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 
 	unsigned char *payload = data + 8;
 
-	// DIF block ID byte 0:
-	//   bits 7-5: Section Type (SCT) - 0=Header
-	//   bit  4:   Arbitrary
-	//   bits 3-0: DIF Sequence Number (DSN)
+	// Each packet contains multiple 80-byte DIF blocks.
+	// Scan all DIF blocks for the frame start marker:
+	//   DIF block ID byte 0:
+	//     bits 7-5: Section Type (SCT) - 0=Header
+	//     bit  4:   Arbitrary
+	//     bits 3-0: DIF Sequence Number (DSN)
 	// A new frame starts with Header section (SCT=0), sequence 0 (DSN=0)
-	int sectionType = ( payload[0] >> 5 ) & 0x7;
-	int sequenceNum = payload[0] & 0xF;
-
-	if ( sectionType == 0 && sequenceNum == 0 )
+	for ( int off = 0; off + 80 <= payloadLen; off += 80 )
 	{
-		// Frame boundary: deliver the previous frame if we have one
-		if ( self->m_rawIsoSynced && self->m_rawIsoFrameOffset > 0 )
+		int sct = ( payload[off] >> 5 ) & 0x7;
+		int dsn = payload[off] & 0xF;
+
+		if ( sct == 0 && dsn == 0 )
 		{
-			self->Handler( self->m_rawIsoFrameBuf,
-				self->m_rawIsoFrameOffset, 0 );
+			// Frame boundary found at DIF block offset
+			// First, append any data before this block to previous frame
+			if ( self->m_rawIsoSynced && off > 0 &&
+				self->m_rawIsoFrameOffset + off <= self->m_rawIsoFrameSize )
+			{
+				memcpy( self->m_rawIsoFrameBuf + self->m_rawIsoFrameOffset,
+					payload, off );
+				self->m_rawIsoFrameOffset += off;
+			}
+
+			// Deliver the previous frame
+			if ( self->m_rawIsoSynced && self->m_rawIsoFrameOffset > 0 )
+			{
+				self->Handler( self->m_rawIsoFrameBuf,
+					self->m_rawIsoFrameOffset, 0 );
+			}
+
+			// Start new frame from this header block onward
+			self->m_rawIsoFrameOffset = 0;
+			self->m_rawIsoSynced = true;
+			int remaining = payloadLen - off;
+			if ( remaining > 0 &&
+				remaining <= self->m_rawIsoFrameSize )
+			{
+				memcpy( self->m_rawIsoFrameBuf, payload + off,
+					remaining );
+				self->m_rawIsoFrameOffset = remaining;
+			}
+			return RAW1394_ISO_OK;
 		}
-		self->m_rawIsoFrameOffset = 0;
-		self->m_rawIsoSynced = true;
 	}
 
+	// No frame boundary in this packet — append all data
 	if ( self->m_rawIsoSynced &&
 		self->m_rawIsoFrameOffset + payloadLen <= self->m_rawIsoFrameSize )
 	{
