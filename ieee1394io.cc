@@ -766,13 +766,14 @@ int iec61883Connection::ForceConnection( void )
 
 	quadlet_t oMPR = 0;
 	int numPlugs = 1;
+	int bcastBase = 63;
 	if ( raw1394_read( m_handle, m_node, OMPR_ADDR,
 		sizeof( oMPR ), &oMPR ) == 0 )
 	{
 		quadlet_t mprVal = ntohl( oMPR );
 		numPlugs = mprVal & 0x1F;
 		int rateCap = ( mprVal >> 30 ) & 0x3;
-		int bcastBase = ( mprVal >> 24 ) & 0x3F;
+		bcastBase = ( mprVal >> 24 ) & 0x3F;
 		fprintf( stderr, "oMPR = 0x%08x (rate_cap=%d, bcast_base=%d, "
 			"num_plugs=%d)\n", mprVal, rateCap, bcastBase, numPlugs );
 	}
@@ -804,15 +805,20 @@ int iec61883Connection::ForceConnection( void )
 		if ( plug == 0 )
 			m_originaloPCR = oPCR;
 
-		// Prefer a plug that is online and has an active connection
+		// When the broadcast bit is set, the device uses the oMPR
+		// bcast_base channel for output, not the oPCR channel field.
 		if ( online && !foundActive )
 		{
-			bestChannel = oPCRchan;
+			if ( bcastConn )
+				bestChannel = bcastBase;
+			else
+				bestChannel = oPCRchan;
 			foundActive = true;
 		}
 	}
 
-	fprintf( stderr, "Using oPCR channel %d\n", bestChannel );
+	fprintf( stderr, "Using %s channel %d\n",
+		foundActive ? "broadcast" : "fallback", bestChannel );
 
 	return bestChannel;
 }
