@@ -756,7 +756,15 @@ bool DVFrame::IsNormalSpeed()
 
 bool DVFrame::IsComplete( void )
 {
-	return GetDataLen() == GetFrameSize();
+	int len = GetDataLen();
+	if ( len == GetFrameSize() )
+		return true;
+	// APT-based detection can fail for raw iso assembled frames where
+	// the DIF header block is not at byte 0.  Accept any valid DV
+	// frame size as complete.
+	return ( len == DV_NTSC_FRAME_SIZE || len == DV_PAL_FRAME_SIZE ||
+		len == DVCPRO50_NTSC_FRAME_SIZE || len == DVCPRO50_PAL_FRAME_SIZE ||
+		len == DVCPROHD_NTSC_FRAME_SIZE || len == DVCPROHD_PAL_FRAME_SIZE );
 }
 
 
