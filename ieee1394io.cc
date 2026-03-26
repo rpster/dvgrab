@@ -835,13 +835,7 @@ int iec61883Reader::Handler( unsigned char *data, int length, int dropped )
 	if (!currentFrame->IsHDV())
 	{
 		int currentLen = currentFrame->GetDataLen();
-		// When the frame is empty, the DV header hasn't been written yet,
-		// so GetFrameSize() cannot determine PAL vs NTSC correctly.
-		// Use the actual buffer capacity instead; once data is present,
-		// use the tighter format-aware frame size.
-		int maxLen = (currentLen == 0)
-			? currentFrame->GetDataCapacity()
-			: static_cast<DVFrame*>(currentFrame)->GetFrameSize();
+		int maxLen = currentFrame->GetDataCapacity();
 
 		if (currentLen + length > maxLen)
 		{
@@ -863,7 +857,16 @@ int iec61883Reader::Handler( unsigned char *data, int length, int dropped )
 	memcpy( &currentFrame->data[currentFrame->GetDataLen()], data, length );
 	currentFrame->AddDataLen( length );
 
-	if ( currentFrame->IsComplete( ) )
+	// IsComplete() uses GetFrameSize() which relies on parsing the DIF
+	// header APT field.  For raw iso assembled DVCPRO50 frames this
+	// detection may fail (returns DV25 size), so also accept the frame
+	// when it reaches the raw iso assembler's known frame size.
+	bool complete = currentFrame->IsComplete();
+	if ( !complete && m_rawIsoMode &&
+		currentFrame->GetDataLen() >= m_rawIsoFrameSize )
+		complete = true;
+
+	if ( complete )
 	{
 		pthread_mutex_lock( &mutex );
 		outFrames.push_back( currentFrame );
