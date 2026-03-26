@@ -623,7 +623,8 @@ void* iec61883Reader::Thread()
 
 iec61883Connection::iec61883Connection( int port, int node ) :
 	m_node( node | 0xffc0 ), m_channel( -1 ), m_bandwidth( 0 ),
-	m_outputPort( -1 ), m_inputPort( -1 ), m_cmpConnected( false )
+	m_outputPort( -1 ), m_inputPort( -1 ), m_cmpConnected( false ),
+	m_forcedoPCR( false ), m_originaloPCR( 0 )
 {
 	m_handle = raw1394_new_handle_on_port( port );
 	if ( m_handle )
@@ -636,39 +637,99 @@ iec61883Connection::iec61883Connection( int port, int node ) :
 		}
 		else
 		{
-			// CMP connect failed - try to read the device's output Plug
-			// Control Register (oPCR[0]) to find an existing connection's
-			// channel before falling back to channel 63.
-			quadlet_t oPCR0 = 0;
-			// oPCR[0] is at CSR register offset 0x904
-			if ( raw1394_read( m_handle, m_node, CSR_REGISTER_BASE + 0x904,
-				sizeof( oPCR0 ), &oPCR0 ) == 0 )
-			{
-				quadlet_t value = ntohl( oPCR0 );
-				int p2pCount = ( value >> 24 ) & 0x3F;
-				int bcastConn = ( value >> 30 ) & 0x01;
-				if ( p2pCount > 0 || bcastConn )
-				{
-					m_channel = ( value >> 10 ) & 0x3F;
-					fprintf( stderr, "CMP connect failed, using existing oPCR channel %d\n",
-						m_channel );
-				}
-				else
-				{
-					m_channel = 63;
-					fprintf( stderr, "CMP connect failed, no existing connections in oPCR, "
-						"falling back to channel %d\n", m_channel );
-				}
-			}
-			else
-			{
-				m_channel = 63;
-				fprintf( stderr, "CMP connect failed, could not read oPCR, "
-					"falling back to channel %d\n", m_channel );
-			}
+			// CMP connect failed (typically "Failed to get channels
+			// available" when IRM channel allocation doesn't work).
+			// Attempt a direct oPCR write to force the device to stream.
+			m_channel = ForceConnection();
 		}
 	}
 }
+
+int iec61883Connection::ForceConnection( void )
+{
+	// Bypass IRM channel allocation by directly manipulating the
+	// device's output Plug Control Register (oPCR[0]).  This is
+	// needed when the firewire stack cannot act as IRM or allocate
+	// isochronous resources (common on Raspberry Pi / firewire-core).
+	//
+	// oPCR layout (IEC 61883-1):
+	//   bit  31       : online
+	//   bit  30       : broadcast connection counter
+	//   bits 29-24    : point-to-point connection counter (6 bits)
+	//   bits 23-16    : reserved
+	//   bits 15-10    : channel number (6 bits)
+	//   bits  9-8     : data rate
+	//   bits  7-2     : overhead_id
+	//   bits  1-0     : payload
+
+	static const nodeaddr_t OPCR0_ADDR = CSR_REGISTER_BASE + 0x904;
+	int channel = -1;
+
+	quadlet_t oPCR0 = 0;
+	if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
+		sizeof( oPCR0 ), &oPCR0 ) != 0 )
+	{
+		fprintf( stderr, "CMP connect failed, could not read oPCR, "
+			"falling back to channel 63\n" );
+		return 63;
+	}
+
+	quadlet_t value = ntohl( oPCR0 );
+	m_originaloPCR = oPCR0;
+
+	int p2pCount = ( value >> 24 ) & 0x3F;
+	int bcastConn = ( value >> 30 ) & 0x01;
+
+	if ( p2pCount > 0 || bcastConn )
+	{
+		// An existing connection is active — use its channel.
+		channel = ( value >> 10 ) & 0x3F;
+		fprintf( stderr, "CMP connect failed, using existing oPCR channel %d\n",
+			channel );
+		return channel;
+	}
+
+	// No existing connection — force one by incrementing the p2p
+	// connection counter and setting channel 63 in the oPCR via
+	// compare-and-swap.
+	channel = 63;
+	quadlet_t newValue = value;
+	// Set online bit
+	newValue |= ( 1u << 31 );
+	// Increment p2p connection count (bits 29-24) by 1
+	newValue = ( newValue & ~( 0x3Fu << 24 ) ) | ( 1u << 24 );
+	// Set channel (bits 15-10)
+	newValue = ( newValue & ~( 0x3Fu << 10 ) ) | ( ( channel & 0x3F ) << 10 );
+
+	// raw1394_lock takes host byte order values
+	if ( raw1394_lock( m_handle, m_node, OPCR0_ADDR,
+		RAW1394_EXTCODE_COMPARE_SWAP,
+		newValue, value, &oPCR0 ) == 0 && oPCR0 == value )
+	{
+		m_forcedoPCR = true;
+		fprintf( stderr, "CMP connect failed, forced oPCR connection on channel %d\n",
+			channel );
+	}
+	else
+	{
+		// Compare-swap failed — the register changed underneath us.
+		// Re-read to see if someone else set up a connection.
+		if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
+			sizeof( oPCR0 ), &oPCR0 ) == 0 )
+		{
+			value = ntohl( oPCR0 );
+			p2pCount = ( value >> 24 ) & 0x3F;
+			bcastConn = ( value >> 30 ) & 0x01;
+			if ( p2pCount > 0 || bcastConn )
+				channel = ( value >> 10 ) & 0x3F;
+		}
+		fprintf( stderr, "CMP connect failed, oPCR compare-swap failed, "
+			"trying channel %d\n", channel );
+	}
+
+	return channel;
+}
+
 
 iec61883Connection::~iec61883Connection( )
 {
@@ -679,6 +740,14 @@ iec61883Connection::~iec61883Connection( )
 			iec61883_cmp_disconnect( m_handle, m_node, m_outputPort,
 				raw1394_get_local_id (m_handle), m_inputPort,
 				m_channel, m_bandwidth );
+		}
+		else if ( m_forcedoPCR )
+		{
+			// Restore the original oPCR value to tear down our
+			// forced connection.
+			static const nodeaddr_t OPCR0_ADDR = CSR_REGISTER_BASE + 0x904;
+			raw1394_write( m_handle, m_node, OPCR0_ADDR,
+				sizeof( m_originaloPCR ), &m_originaloPCR );
 		}
 		raw1394_destroy_handle( m_handle );
 	}

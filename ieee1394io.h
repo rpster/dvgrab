@@ -166,6 +166,10 @@ private:
 	int m_outputPort;
 	int m_inputPort;
 	bool m_cmpConnected;
+	bool m_forcedoPCR;
+	quadlet_t m_originaloPCR;
+
+	int ForceConnection( void );
 
 public:
 
