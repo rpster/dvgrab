@@ -545,33 +545,91 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 
 	unsigned char *payload = data + 8;
 
-	// Accumulate payload data and deliver a complete frame every
-	// m_rawIsoFrameSize bytes.
-	if ( self->m_rawIsoFrameOffset + payloadLen >= self->m_rawIsoFrameSize )
+	// Phase 1: Before sync, accumulate data and scan for the first
+	// DIF header block (SCT=0) with DSN=0 to find frame alignment.
+	if ( !self->m_rawIsoSynced )
 	{
-		int remaining = self->m_rawIsoFrameSize - self->m_rawIsoFrameOffset;
-		if ( remaining > 0 )
-			memcpy( self->m_rawIsoFrameBuf + self->m_rawIsoFrameOffset,
-				payload, remaining );
-
-		self->Handler( self->m_rawIsoFrameBuf,
-			self->m_rawIsoFrameSize, 0 );
-
-		// Start next frame with leftover data
-		self->m_rawIsoFrameOffset = 0;
-		int leftover = payloadLen - remaining;
-		if ( leftover > 0 && leftover <= self->m_rawIsoFrameSize )
+		// Scan each 80-byte DIF block in this packet
+		for ( int off = 0; off + 80 <= payloadLen; off += 80 )
 		{
-			memcpy( self->m_rawIsoFrameBuf, payload + remaining,
-				leftover );
-			self->m_rawIsoFrameOffset = leftover;
+			int sct = ( payload[off] >> 5 ) & 0x7;
+			int dsn = payload[off] & 0xF;
+
+			if ( sct == 0 && dsn == 0 )
+			{
+				// Found frame start — begin accumulating from here
+				self->m_rawIsoSynced = true;
+				self->m_rawIsoFrameOffset = 0;
+				int remaining = payloadLen - off;
+				memcpy( self->m_rawIsoFrameBuf, payload + off,
+					remaining );
+				self->m_rawIsoFrameOffset = remaining;
+				fprintf( stderr, "DIF sync: found header at "
+					"pkt #%d offset %d (byte 0x%02x)\n",
+					rawCallCount, off, payload[off] );
+				return RAW1394_ISO_OK;
+			}
+		}
+		// No header found yet, keep scanning
+		return RAW1394_ISO_OK;
+	}
+
+	// Phase 2: Synced — accumulate and deliver at frame size.
+	// Also check for header blocks to re-sync if needed.
+	// Scan for frame boundary in this packet
+	for ( int off = 0; off + 80 <= payloadLen; off += 80 )
+	{
+		int sct = ( payload[off] >> 5 ) & 0x7;
+		int dsn = payload[off] & 0xF;
+
+		if ( sct == 0 && dsn == 0 && self->m_rawIsoFrameOffset > 0 )
+		{
+			// Frame boundary — append data before this block
+			if ( off > 0 &&
+				self->m_rawIsoFrameOffset + off <= self->m_rawIsoFrameSize )
+			{
+				memcpy( self->m_rawIsoFrameBuf +
+					self->m_rawIsoFrameOffset, payload, off );
+				self->m_rawIsoFrameOffset += off;
+			}
+
+			// Deliver frame
+			self->Handler( self->m_rawIsoFrameBuf,
+				self->m_rawIsoFrameOffset, 0 );
+
+			// Start new frame from header block
+			self->m_rawIsoFrameOffset = 0;
+			int remaining = payloadLen - off;
+			if ( remaining > 0 &&
+				remaining <= self->m_rawIsoFrameSize )
+			{
+				memcpy( self->m_rawIsoFrameBuf, payload + off,
+					remaining );
+				self->m_rawIsoFrameOffset = remaining;
+			}
+			return RAW1394_ISO_OK;
 		}
 	}
-	else
+
+	// No frame boundary — append entire payload
+	if ( self->m_rawIsoFrameOffset + payloadLen <= self->m_rawIsoFrameSize )
 	{
 		memcpy( self->m_rawIsoFrameBuf + self->m_rawIsoFrameOffset,
 			payload, payloadLen );
 		self->m_rawIsoFrameOffset += payloadLen;
+	}
+	else if ( self->m_rawIsoFrameOffset >= self->m_rawIsoFrameSize )
+	{
+		// Buffer full without finding header — deliver as-is and
+		// fall back to fixed-size framing
+		self->Handler( self->m_rawIsoFrameBuf,
+			self->m_rawIsoFrameSize, 0 );
+		self->m_rawIsoFrameOffset = 0;
+		if ( payloadLen <= self->m_rawIsoFrameSize )
+		{
+			memcpy( self->m_rawIsoFrameBuf, payload, payloadLen );
+			self->m_rawIsoFrameOffset = payloadLen;
+		}
 	}
 
 	return RAW1394_ISO_OK;
