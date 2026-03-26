@@ -679,41 +679,67 @@ int iec61883Connection::ForceConnection( void )
 	//   bits  7-2     : overhead_id
 	//   bits  1-0     : payload
 
+	// Read the output Master Plug Register (oMPR) at offset 0x900
+	// to find how many output plugs exist.
+	//
+	// oMPR layout:
+	//   bits 31-30 : data rate capability
+	//   bits 29-24 : broadcast channel base
+	//   bits  4-0  : number of output plugs
+	static const nodeaddr_t OMPR_ADDR  = CSR_REGISTER_BASE + 0x900;
 	static const nodeaddr_t OPCR0_ADDR = CSR_REGISTER_BASE + 0x904;
 
-	quadlet_t oPCR0 = 0;
-	if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
-		sizeof( oPCR0 ), &oPCR0 ) != 0 )
+	quadlet_t oMPR = 0;
+	int numPlugs = 1;
+	if ( raw1394_read( m_handle, m_node, OMPR_ADDR,
+		sizeof( oMPR ), &oMPR ) == 0 )
 	{
-		fprintf( stderr, "Could not read oPCR, falling back to channel 63\n" );
-		return 63;
+		quadlet_t mprVal = ntohl( oMPR );
+		numPlugs = mprVal & 0x1F;
+		int rateCap = ( mprVal >> 30 ) & 0x3;
+		int bcastBase = ( mprVal >> 24 ) & 0x3F;
+		fprintf( stderr, "oMPR = 0x%08x (rate_cap=%d, bcast_base=%d, "
+			"num_plugs=%d)\n", mprVal, rateCap, bcastBase, numPlugs );
 	}
 
-	quadlet_t value = ntohl( oPCR0 );
-	m_originaloPCR = oPCR0;
+	// Read all output Plug Control Registers
+	int bestChannel = 63;
+	bool foundActive = false;
 
-	int online    = ( value >> 31 ) & 1;
-	int bcastConn = ( value >> 30 ) & 1;
-	int p2pCount  = ( value >> 24 ) & 0x3F;
-	int oPCRchan  = ( value >> 10 ) & 0x3F;
-	int dataRate  = ( value >> 8 )  & 0x3;
+	for ( int plug = 0; plug < numPlugs && plug < 4; plug++ )
+	{
+		quadlet_t oPCR = 0;
+		nodeaddr_t addr = OPCR0_ADDR + plug * 4;
 
-	fprintf( stderr, "oPCR[0] = 0x%08x (online=%d, bcast=%d, p2p=%d, "
-		"channel=%d, rate=%d)\n", value,
-		online, bcastConn, p2pCount, oPCRchan, dataRate );
+		if ( raw1394_read( m_handle, m_node, addr,
+			sizeof( oPCR ), &oPCR ) != 0 )
+			continue;
 
-	// Use the channel from the device's oPCR.  If the device has a
-	// broadcast connection (bcast=1) or existing p2p connections,
-	// the oPCR channel field tells us where isochronous data will
-	// appear.  Since we cannot modify the oPCR on this platform
-	// (IRM and compare-swap both fail), we must listen on whatever
-	// channel the device is already configured to use.
-	int channel = online ? oPCRchan : 63;
+		quadlet_t value = ntohl( oPCR );
+		int online    = ( value >> 31 ) & 1;
+		int bcastConn = ( value >> 30 ) & 1;
+		int p2pCount  = ( value >> 24 ) & 0x3F;
+		int oPCRchan  = ( value >> 10 ) & 0x3F;
+		int dataRate  = ( value >> 8 )  & 0x3;
 
-	fprintf( stderr, "Using oPCR channel %d (online=%d, bcast=%d)\n",
-		channel, online, bcastConn );
+		fprintf( stderr, "oPCR[%d] = 0x%08x (online=%d, bcast=%d, p2p=%d, "
+			"channel=%d, rate=%d)\n", plug, value,
+			online, bcastConn, p2pCount, oPCRchan, dataRate );
 
-	return channel;
+		if ( plug == 0 )
+			m_originaloPCR = oPCR;
+
+		// Prefer a plug that is online and has an active connection
+		if ( online && !foundActive )
+		{
+			bestChannel = oPCRchan;
+			foundActive = true;
+		}
+	}
+
+	fprintf( stderr, "Using oPCR channel %d\n", bestChannel );
+
+	return bestChannel;
 }
 
 
