@@ -474,6 +474,7 @@ bool iec61883Reader::StartReceive()
 	bool success;
 
 	/* Starting iso receive */
+	fprintf( stderr, "Starting isochronous receive on channel %d\n", channel );
 	try
 	{
 		if ( isHDV )
@@ -481,6 +482,7 @@ bool iec61883Reader::StartReceive()
 		else
 			fail_neg( iec61883_dv_fb_start( m_iec61883_dv, channel ) );
 		success = true;
+		fprintf( stderr, "Isochronous receive started successfully\n" );
 	}
 	catch ( string exc )
 	{
@@ -519,6 +521,11 @@ int iec61883Reader::DvHandlerProxy( unsigned char *data, int length,
 
 int iec61883Reader::Handler( unsigned char *data, int length, int dropped )
 {
+	static int handlerCalls = 0;
+	if ( handlerCalls == 0 )
+		fprintf( stderr, "First DV packet received: %d bytes\n", length );
+	handlerCalls++;
+
 	badFrames += dropped;
 
 	if ( currentFrame == NULL )
@@ -673,115 +680,38 @@ int iec61883Connection::ForceConnection( void )
 	//   bits  1-0     : payload
 
 	static const nodeaddr_t OPCR0_ADDR = CSR_REGISTER_BASE + 0x904;
-	int channel = 63;
 
 	quadlet_t oPCR0 = 0;
 	if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
 		sizeof( oPCR0 ), &oPCR0 ) != 0 )
 	{
-		fprintf( stderr, "CMP connect failed, could not read oPCR, "
-			"falling back to channel %d\n", channel );
-		return channel;
+		fprintf( stderr, "Could not read oPCR, falling back to channel 63\n" );
+		return 63;
 	}
 
 	quadlet_t value = ntohl( oPCR0 );
 	m_originaloPCR = oPCR0;
 
+	int online    = ( value >> 31 ) & 1;
+	int bcastConn = ( value >> 30 ) & 1;
+	int p2pCount  = ( value >> 24 ) & 0x3F;
+	int oPCRchan  = ( value >> 10 ) & 0x3F;
+	int dataRate  = ( value >> 8 )  & 0x3;
+
 	fprintf( stderr, "oPCR[0] = 0x%08x (online=%d, bcast=%d, p2p=%d, "
 		"channel=%d, rate=%d)\n", value,
-		( value >> 31 ) & 1, ( value >> 30 ) & 1,
-		( value >> 24 ) & 0x3F, ( value >> 10 ) & 0x3F,
-		( value >> 8 ) & 0x3 );
+		online, bcastConn, p2pCount, oPCRchan, dataRate );
 
-	// Always force a fresh connection on channel 63, regardless of
-	// existing oPCR state.  Any existing connection from a failed
-	// CMP attempt is likely stale and not actually streaming.
-	//
-	// The oPCR value can change between read and compare-swap (the
-	// device may toggle the online bit, or a prior CMP attempt may
-	// have a delayed effect).  Retry the read+lock cycle several
-	// times before falling back to a raw write.
-	bool swapOK = false;
-	for ( int attempt = 0; attempt < 5 && !swapOK; attempt++ )
-	{
-		if ( attempt > 0 )
-		{
-			// Re-read the oPCR for each retry
-			if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
-				sizeof( oPCR0 ), &oPCR0 ) != 0 )
-				break;
-			value = ntohl( oPCR0 );
-			m_originaloPCR = oPCR0;
-		}
+	// Use the channel from the device's oPCR.  If the device has a
+	// broadcast connection (bcast=1) or existing p2p connections,
+	// the oPCR channel field tells us where isochronous data will
+	// appear.  Since we cannot modify the oPCR on this platform
+	// (IRM and compare-swap both fail), we must listen on whatever
+	// channel the device is already configured to use.
+	int channel = online ? oPCRchan : 63;
 
-		quadlet_t newValue = value;
-		// Set online bit
-		newValue |= ( 1u << 31 );
-		// Set p2p connection count to 1
-		newValue = ( newValue & ~( 0x3Fu << 24 ) ) | ( 1u << 24 );
-		// Set channel to 63
-		newValue = ( newValue & ~( 0x3Fu << 10 ) ) | ( ( channel & 0x3F ) << 10 );
-
-		if ( attempt == 0 )
-			fprintf( stderr, "Writing oPCR[0] = 0x%08x (channel=%d, p2p=1)\n",
-				newValue, channel );
-
-		// raw1394_lock uses bus byte order (big-endian) for all values.
-		quadlet_t busOld = htonl( value );
-		quadlet_t busNew = htonl( newValue );
-		quadlet_t lockResult = 0;
-
-		if ( raw1394_lock( m_handle, m_node, OPCR0_ADDR,
-			RAW1394_EXTCODE_COMPARE_SWAP,
-			busNew, busOld, &lockResult ) == 0 && lockResult == busOld )
-		{
-			m_forcedoPCR = true;
-			swapOK = true;
-			fprintf( stderr, "Forced oPCR connection on channel %d\n", channel );
-		}
-		else
-		{
-			fprintf( stderr, "oPCR compare-swap attempt %d failed "
-				"(expected 0x%08x, got 0x%08x)\n",
-				attempt + 1, busOld, lockResult );
-		}
-	}
-
-	if ( !swapOK )
-	{
-		// Compare-swap keeps failing — fall back to a direct write.
-		// Not all devices accept plain writes to oPCR, but it's our
-		// last resort.
-		quadlet_t newValue = value;
-		newValue |= ( 1u << 31 );
-		newValue = ( newValue & ~( 0x3Fu << 24 ) ) | ( 1u << 24 );
-		newValue = ( newValue & ~( 0x3Fu << 10 ) ) | ( ( channel & 0x3F ) << 10 );
-
-		quadlet_t busNew = htonl( newValue );
-		if ( raw1394_write( m_handle, m_node, OPCR0_ADDR,
-			sizeof( busNew ), &busNew ) == 0 )
-		{
-			m_forcedoPCR = true;
-			fprintf( stderr, "Forced oPCR via direct write on channel %d\n",
-				channel );
-		}
-		else
-		{
-			fprintf( stderr, "oPCR direct write also failed, "
-				"trying channel %d anyway\n", channel );
-		}
-	}
-
-	// Verify the oPCR was actually written
-	if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
-		sizeof( oPCR0 ), &oPCR0 ) == 0 )
-	{
-		value = ntohl( oPCR0 );
-		fprintf( stderr, "oPCR[0] after write = 0x%08x (online=%d, p2p=%d, "
-			"channel=%d)\n", value,
-			( value >> 31 ) & 1, ( value >> 24 ) & 0x3F,
-			( value >> 10 ) & 0x3F );
-	}
+	fprintf( stderr, "Using oPCR channel %d (online=%d, bcast=%d)\n",
+		channel, online, bcastConn );
 
 	return channel;
 }
