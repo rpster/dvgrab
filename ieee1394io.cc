@@ -696,65 +696,79 @@ int iec61883Connection::ForceConnection( void )
 	// Always force a fresh connection on channel 63, regardless of
 	// existing oPCR state.  Any existing connection from a failed
 	// CMP attempt is likely stale and not actually streaming.
-	quadlet_t newValue = value;
-	// Set online bit
-	newValue |= ( 1u << 31 );
-	// Set p2p connection count to 1
-	newValue = ( newValue & ~( 0x3Fu << 24 ) ) | ( 1u << 24 );
-	// Set channel to 63
-	newValue = ( newValue & ~( 0x3Fu << 10 ) ) | ( ( channel & 0x3F ) << 10 );
-
-	fprintf( stderr, "Writing oPCR[0] = 0x%08x (channel=%d, p2p=1)\n",
-		newValue, channel );
-
-	// raw1394_lock and raw1394_read use bus byte order (big-endian).
-	// Convert host byte order values for the compare-and-swap, and
-	// compare the result in bus byte order.
-	quadlet_t busOld = htonl( value );
-	quadlet_t busNew = htonl( newValue );
-	quadlet_t lockResult = 0;
-
-	if ( raw1394_lock( m_handle, m_node, OPCR0_ADDR,
-		RAW1394_EXTCODE_COMPARE_SWAP,
-		busNew, busOld, &lockResult ) == 0 && lockResult == busOld )
+	//
+	// The oPCR value can change between read and compare-swap (the
+	// device may toggle the online bit, or a prior CMP attempt may
+	// have a delayed effect).  Retry the read+lock cycle several
+	// times before falling back to a raw write.
+	bool swapOK = false;
+	for ( int attempt = 0; attempt < 5 && !swapOK; attempt++ )
 	{
-		m_forcedoPCR = true;
-		fprintf( stderr, "Forced oPCR connection on channel %d\n", channel );
-	}
-	else
-	{
-		fprintf( stderr, "oPCR compare-swap failed (expected 0x%08x, "
-			"got 0x%08x), retrying\n", busOld, lockResult );
-
-		// Compare-swap failed — oPCR changed between read and swap.
-		// Re-read and retry once.
-		if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
-			sizeof( oPCR0 ), &oPCR0 ) == 0 )
+		if ( attempt > 0 )
 		{
+			// Re-read the oPCR for each retry
+			if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
+				sizeof( oPCR0 ), &oPCR0 ) != 0 )
+				break;
 			value = ntohl( oPCR0 );
 			m_originaloPCR = oPCR0;
+		}
 
-			newValue = value;
-			newValue |= ( 1u << 31 );
-			newValue = ( newValue & ~( 0x3Fu << 24 ) ) | ( 1u << 24 );
-			newValue = ( newValue & ~( 0x3Fu << 10 ) ) | ( ( channel & 0x3F ) << 10 );
+		quadlet_t newValue = value;
+		// Set online bit
+		newValue |= ( 1u << 31 );
+		// Set p2p connection count to 1
+		newValue = ( newValue & ~( 0x3Fu << 24 ) ) | ( 1u << 24 );
+		// Set channel to 63
+		newValue = ( newValue & ~( 0x3Fu << 10 ) ) | ( ( channel & 0x3F ) << 10 );
 
-			busOld = htonl( value );
-			busNew = htonl( newValue );
+		if ( attempt == 0 )
+			fprintf( stderr, "Writing oPCR[0] = 0x%08x (channel=%d, p2p=1)\n",
+				newValue, channel );
 
-			if ( raw1394_lock( m_handle, m_node, OPCR0_ADDR,
-				RAW1394_EXTCODE_COMPARE_SWAP,
-				busNew, busOld, &lockResult ) == 0 && lockResult == busOld )
-			{
-				m_forcedoPCR = true;
-				fprintf( stderr, "Forced oPCR connection on channel %d (retry)\n",
-					channel );
-			}
-			else
-			{
-				fprintf( stderr, "oPCR retry also failed, trying channel %d anyway\n",
-					channel );
-			}
+		// raw1394_lock uses bus byte order (big-endian) for all values.
+		quadlet_t busOld = htonl( value );
+		quadlet_t busNew = htonl( newValue );
+		quadlet_t lockResult = 0;
+
+		if ( raw1394_lock( m_handle, m_node, OPCR0_ADDR,
+			RAW1394_EXTCODE_COMPARE_SWAP,
+			busNew, busOld, &lockResult ) == 0 && lockResult == busOld )
+		{
+			m_forcedoPCR = true;
+			swapOK = true;
+			fprintf( stderr, "Forced oPCR connection on channel %d\n", channel );
+		}
+		else
+		{
+			fprintf( stderr, "oPCR compare-swap attempt %d failed "
+				"(expected 0x%08x, got 0x%08x)\n",
+				attempt + 1, busOld, lockResult );
+		}
+	}
+
+	if ( !swapOK )
+	{
+		// Compare-swap keeps failing — fall back to a direct write.
+		// Not all devices accept plain writes to oPCR, but it's our
+		// last resort.
+		quadlet_t newValue = value;
+		newValue |= ( 1u << 31 );
+		newValue = ( newValue & ~( 0x3Fu << 24 ) ) | ( 1u << 24 );
+		newValue = ( newValue & ~( 0x3Fu << 10 ) ) | ( ( channel & 0x3F ) << 10 );
+
+		quadlet_t busNew = htonl( newValue );
+		if ( raw1394_write( m_handle, m_node, OPCR0_ADDR,
+			sizeof( busNew ), &busNew ) == 0 )
+		{
+			m_forcedoPCR = true;
+			fprintf( stderr, "Forced oPCR via direct write on channel %d\n",
+				channel );
+		}
+		else
+		{
+			fprintf( stderr, "oPCR direct write also failed, "
+				"trying channel %d anyway\n", channel );
 		}
 	}
 
