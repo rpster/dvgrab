@@ -597,7 +597,7 @@ bool iec61883Reader::StartReceive()
 			int counter = 0;
 			raw1394_set_userdata( probe, &counter );
 
-			if ( raw1394_iso_recv_init( probe, rawIsoHandler, 64, 1024,
+			if ( raw1394_iso_recv_init( probe, rawIsoHandler, 64, 2048,
 				channel, RAW1394_DMA_DEFAULT, -1 ) == 0 )
 			{
 				if ( raw1394_iso_recv_start( probe, -1, -1, 0 ) == 0 )
@@ -654,7 +654,7 @@ bool iec61883Reader::StartReceive()
 			{
 				raw1394_set_userdata( probe2, &cipData );
 				if ( raw1394_iso_recv_init( probe2, CipProbe::handler,
-					64, 1024, channel, RAW1394_DMA_DEFAULT, -1 ) == 0 )
+					64, 2048, channel, RAW1394_DMA_DEFAULT, -1 ) == 0 )
 				{
 					if ( raw1394_iso_recv_start( probe2, -1, -1, 0 ) == 0 )
 					{
@@ -689,13 +689,22 @@ bool iec61883Reader::StartReceive()
 	// DV25, which libiec61883 may not handle correctly)
 	if ( !isHDV && probePackets > 0 && probeFn > 0 )
 	{
-		fprintf( stderr, "Using raw iso receive mode for DVCPRO50 "
-			"(FN=%d, %d-byte packets)\n", probeFn, probeMaxLen );
+		// Determine format from FN:
+		//   FN=1: DVCPRO50 (50 Mbps) - 960 byte packets
+		//   FN=2: DVCPRO HD (100 Mbps) - 1920 byte packets
+		const char *fmtName = probeFn >= 2 ? "DVCPRO-HD" : "DVCPRO50";
+		fprintf( stderr, "Using raw iso receive mode for %s "
+			"(FN=%d, %d-byte packets)\n", fmtName, probeFn,
+			probeMaxLen );
 
-		// Determine frame size from FDF 50/60 flag
+		// Determine frame size from FN and FDF 50/60 flag
 		bool pal = ( probeFdf & 0x80 ) != 0;
-		m_rawIsoFrameSize = pal ? DVCPRO50_PAL_FRAME_SIZE
-			: DVCPRO50_NTSC_FRAME_SIZE;
+		if ( probeFn >= 2 )
+			m_rawIsoFrameSize = pal ? DVCPROHD_PAL_FRAME_SIZE
+				: DVCPROHD_NTSC_FRAME_SIZE;
+		else
+			m_rawIsoFrameSize = pal ? DVCPRO50_PAL_FRAME_SIZE
+				: DVCPRO50_NTSC_FRAME_SIZE;
 		m_rawIsoFrameBuf = new unsigned char[ m_rawIsoFrameSize ];
 		m_rawIsoFrameOffset = 0;
 		m_rawIsoSynced = false;
@@ -714,7 +723,7 @@ bool iec61883Reader::StartReceive()
 		else
 		{
 			raw1394_set_userdata( m_rawIsoHandle, this );
-			int maxPkt = probeMaxLen > 0 ? probeMaxLen : 1024;
+			int maxPkt = probeMaxLen > 0 ? probeMaxLen : 2048;
 			if ( raw1394_iso_recv_init( m_rawIsoHandle, RawDvIsoHandler,
 				400, maxPkt, channel, RAW1394_DMA_DEFAULT, -1 ) == 0 )
 			{
