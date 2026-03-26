@@ -633,7 +633,33 @@ iec61883Connection::iec61883Connection( int port, int node ) :
 			raw1394_get_local_id( m_handle ), &m_inputPort, &m_bandwidth );
 		if ( m_channel >= 0 )
 		{
-			m_cmpConnected = true;
+			// Verify the connection actually took effect by reading
+			// back the oPCR.  iec61883_cmp_connect can return a
+			// channel even when IRM allocation fails, but without
+			// actually modifying the device's oPCR.
+			static const nodeaddr_t OPCR0_ADDR = CSR_REGISTER_BASE + 0x904;
+			quadlet_t oPCR0 = 0;
+			if ( raw1394_read( m_handle, m_node, OPCR0_ADDR,
+				sizeof( oPCR0 ), &oPCR0 ) == 0 )
+			{
+				quadlet_t value = ntohl( oPCR0 );
+				int p2pCount = ( value >> 24 ) & 0x3F;
+				if ( p2pCount > 0 )
+				{
+					m_cmpConnected = true;
+				}
+				else
+				{
+					fprintf( stderr, "CMP returned channel %d but oPCR shows "
+						"no active connection, forcing oPCR\n", m_channel );
+					m_channel = ForceConnection();
+				}
+			}
+			else
+			{
+				// Can't verify — assume it worked.
+				m_cmpConnected = true;
+			}
 		}
 		else
 		{
