@@ -514,7 +514,7 @@ bool iec61883Reader::StartReceive()
 					if ( r > 0 )
 						raw1394_loop_iterate( probe );
 				}
-				raw1394_iso_recv_stop( probe );
+				raw1394_iso_stop( probe );
 				raw1394_iso_shutdown( probe );
 				fprintf( stderr, "  Channel %d: %d packets in 500ms\n",
 					ch, counter );
