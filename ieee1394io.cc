@@ -315,6 +315,11 @@ iec61883Reader::iec61883Reader( int p, int c, int bufSize,
 	m_handle = NULL;
 	m_iec61883_mpeg2 = NULL;
 	m_iec61883_dv = NULL;
+	m_rawIsoMode = false;
+	m_rawIsoFrameBuf = NULL;
+	m_rawIsoFrameSize = 0;
+	m_rawIsoFrameOffset = 0;
+	m_rawIsoSynced = false;
 }
 
 
@@ -452,6 +457,11 @@ bool iec61883Reader::Open()
 
 void iec61883Reader::Close()
 {
+	if ( m_rawIsoFrameBuf != NULL )
+	{
+		delete[] m_rawIsoFrameBuf;
+		m_rawIsoFrameBuf = NULL;
+	}
 	if ( m_iec61883_dv != NULL )
 	{
 		iec61883_dv_fb_close( m_iec61883_dv );
@@ -500,72 +510,226 @@ rawIsoHandler( raw1394handle_t handle, unsigned char *data,
 	return RAW1394_ISO_OK;
 }
 
+enum raw1394_iso_disposition
+iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
+	unsigned int len, unsigned char channel, unsigned char tag,
+	unsigned char sy, unsigned int cycle, unsigned int dropped )
+{
+	iec61883Reader *self = static_cast< iec61883Reader* >(
+		raw1394_get_userdata( handle ) );
+
+	// Need CIP header (tag=1) with payload
+	if ( tag != 1 || len <= 8 )
+		return RAW1394_ISO_OK;
+
+	// Check FMT = 0x00 (DV)
+	unsigned char fmt = data[4] & 0x3F;
+	if ( fmt != 0x00 )
+		return RAW1394_ISO_OK;
+
+	int payloadLen = len - 8;
+	if ( payloadLen == 0 )
+		return RAW1394_ISO_OK;
+
+	unsigned char *payload = data + 8;
+
+	// DIF block section type is in bits 7-5 of byte 0
+	// Section type 0 = Header, sequence number in bits 3-0 of byte 1
+	// A new frame starts with Header section, sequence 0
+	int sectionType = ( payload[0] >> 5 ) & 0x7;
+	int sequenceNum = payload[1] & 0xF;
+
+	if ( sectionType == 0 && sequenceNum == 0 )
+	{
+		// Frame boundary: deliver the previous frame if we have one
+		if ( self->m_rawIsoSynced && self->m_rawIsoFrameOffset > 0 )
+		{
+			self->Handler( self->m_rawIsoFrameBuf,
+				self->m_rawIsoFrameOffset, 0 );
+		}
+		self->m_rawIsoFrameOffset = 0;
+		self->m_rawIsoSynced = true;
+	}
+
+	if ( self->m_rawIsoSynced &&
+		self->m_rawIsoFrameOffset + payloadLen <= self->m_rawIsoFrameSize )
+	{
+		memcpy( self->m_rawIsoFrameBuf + self->m_rawIsoFrameOffset,
+			payload, payloadLen );
+		self->m_rawIsoFrameOffset += payloadLen;
+	}
+
+	return RAW1394_ISO_OK;
+}
+
 bool iec61883Reader::StartReceive()
 {
 	bool success;
 
-	// Probe: try raw iso receive on a few channels to check if
-	// any isochronous data is on the bus.
-	fprintf( stderr, "Probing for isochronous data...\n" );
-	int probeChannels[] = { channel, 63, 0 };
-	for ( int i = 0; i < 3; i++ )
+	// Probe: try raw iso receive to check for isochronous data and
+	// detect stream parameters.
+	fprintf( stderr, "Probing for isochronous data on channel %d...\n",
+		channel );
+	int probeFn = -1;
+	int probeDbs = -1;
+	int probeFdf = -1;
+	int probePackets = 0;
+	int probeMaxLen = 0;
 	{
-		int ch = probeChannels[ i ];
 		raw1394handle_t probe = raw1394_new_handle_on_port( m_port );
-		if ( !probe )
-			continue;
-
-		int counter = 0;
-		raw1394_set_userdata( probe, &counter );
-
-		if ( raw1394_iso_recv_init( probe, rawIsoHandler, 64, 1024,
-			ch, RAW1394_DMA_DEFAULT, -1 ) == 0 )
+		if ( probe )
 		{
-			if ( raw1394_iso_recv_start( probe, -1, -1, 0 ) == 0 )
+			int counter = 0;
+			raw1394_set_userdata( probe, &counter );
+
+			if ( raw1394_iso_recv_init( probe, rawIsoHandler, 64, 1024,
+				channel, RAW1394_DMA_DEFAULT, -1 ) == 0 )
 			{
-				// Poll for up to 500ms
-				int probe_fd = raw1394_get_fd( probe );
-				struct pollfd pfd = { probe_fd, POLLIN, 0 };
-				for ( int t = 0; t < 10; t++ )
+				if ( raw1394_iso_recv_start( probe, -1, -1, 0 ) == 0 )
 				{
-					int r = poll( &pfd, 1, 50 );
-					if ( r > 0 )
-						raw1394_loop_iterate( probe );
+					int probe_fd = raw1394_get_fd( probe );
+					struct pollfd pfd = { probe_fd, POLLIN, 0 };
+					for ( int t = 0; t < 10; t++ )
+					{
+						int r = poll( &pfd, 1, 50 );
+						if ( r > 0 )
+							raw1394_loop_iterate( probe );
+					}
+					raw1394_iso_stop( probe );
+					raw1394_iso_shutdown( probe );
+					probePackets = counter;
+					fprintf( stderr, "  Probe: %d packets in 500ms\n",
+						counter );
 				}
-				raw1394_iso_stop( probe );
-				raw1394_iso_shutdown( probe );
-				fprintf( stderr, "  Channel %d: %d packets in 500ms\n",
-					ch, counter );
 			}
-			else
-			{
-				fprintf( stderr, "  Channel %d: iso_recv_start failed "
-					"(errno=%d: %s)\n", ch, errno, strerror( errno ) );
-			}
+			raw1394_destroy_handle( probe );
 		}
-		else
+
+		// Second probe pass to capture CIP details
+		if ( probePackets > 0 )
 		{
-			fprintf( stderr, "  Channel %d: iso_recv_init failed "
-				"(errno=%d: %s)\n", ch, errno, strerror( errno ) );
+			struct CipProbeData {
+				int fn, dbs, fdf, maxLen, count;
+			} cipData = { -1, -1, -1, 0, 0 };
+
+			// Use a lambda-like static function
+			struct CipProbe {
+				static enum raw1394_iso_disposition handler(
+					raw1394handle_t h, unsigned char *d, unsigned int l,
+					unsigned char ch, unsigned char tg, unsigned char s,
+					unsigned int cy, unsigned int dr )
+				{
+					CipProbeData *cd = static_cast< CipProbeData* >(
+						raw1394_get_userdata( h ) );
+					if ( (int)l > cd->maxLen )
+						cd->maxLen = l;
+					if ( tg == 1 && l >= 8 && cd->fn < 0 )
+					{
+						cd->dbs = d[1];
+						cd->fn  = ( d[2] >> 6 ) & 0x3;
+						cd->fdf = d[5];
+					}
+					cd->count++;
+					return RAW1394_ISO_OK;
+				}
+			};
+
+			raw1394handle_t probe2 = raw1394_new_handle_on_port( m_port );
+			if ( probe2 )
+			{
+				raw1394_set_userdata( probe2, &cipData );
+				if ( raw1394_iso_recv_init( probe2, CipProbe::handler,
+					64, 1024, channel, RAW1394_DMA_DEFAULT, -1 ) == 0 )
+				{
+					if ( raw1394_iso_recv_start( probe2, -1, -1, 0 ) == 0 )
+					{
+						int fd2 = raw1394_get_fd( probe2 );
+						struct pollfd pfd2 = { fd2, POLLIN, 0 };
+						for ( int t = 0; t < 4; t++ )
+						{
+							int r = poll( &pfd2, 1, 50 );
+							if ( r > 0 )
+								raw1394_loop_iterate( probe2 );
+						}
+						raw1394_iso_stop( probe2 );
+						raw1394_iso_shutdown( probe2 );
+					}
+				}
+				raw1394_destroy_handle( probe2 );
+				probeFn = cipData.fn;
+				probeDbs = cipData.dbs;
+				probeFdf = cipData.fdf;
+				probeMaxLen = cipData.maxLen;
+				fprintf( stderr, "  CIP: DBS=%d FN=%d FDF=0x%02x "
+					"max_pkt=%d\n", probeDbs, probeFn, probeFdf,
+					probeMaxLen );
+			}
 		}
-		raw1394_destroy_handle( probe );
 	}
 
 	/* Starting iso receive */
 	fprintf( stderr, "Starting isochronous receive on channel %d\n", channel );
-	try
+
+	// Use raw iso mode for DVCPRO50+ (FN>0 means packets larger than
+	// DV25, which libiec61883 may not handle correctly)
+	if ( !isHDV && probePackets > 0 && probeFn > 0 )
 	{
-		if ( isHDV )
-			fail_neg( iec61883_mpeg2_recv_start( m_iec61883_mpeg2, channel ) );
+		fprintf( stderr, "Using raw iso receive mode for DVCPRO50 "
+			"(FN=%d, %d-byte packets)\n", probeFn, probeMaxLen );
+
+		// Determine frame size from FDF 50/60 flag
+		bool pal = ( probeFdf & 0x80 ) != 0;
+		m_rawIsoFrameSize = pal ? DVCPRO50_PAL_FRAME_SIZE
+			: DVCPRO50_NTSC_FRAME_SIZE;
+		m_rawIsoFrameBuf = new unsigned char[ m_rawIsoFrameSize ];
+		m_rawIsoFrameOffset = 0;
+		m_rawIsoSynced = false;
+		m_rawIsoMode = true;
+
+		raw1394_set_userdata( m_handle, this );
+		int maxPkt = probeMaxLen > 0 ? probeMaxLen : 1024;
+		if ( raw1394_iso_recv_init( m_handle, RawDvIsoHandler, 400,
+			maxPkt, channel, RAW1394_DMA_DEFAULT, -1 ) == 0 )
+		{
+			if ( raw1394_iso_recv_start( m_handle, -1, -1, 0 ) == 0 )
+			{
+				success = true;
+				fprintf( stderr, "Raw iso receive started (frame_size=%d)\n",
+					m_rawIsoFrameSize );
+			}
+			else
+			{
+				fprintf( stderr, "raw1394_iso_recv_start failed: %s\n",
+					strerror( errno ) );
+				raw1394_iso_shutdown( m_handle );
+				m_rawIsoMode = false;
+				success = false;
+			}
+		}
 		else
-			fail_neg( iec61883_dv_fb_start( m_iec61883_dv, channel ) );
-		success = true;
-		fprintf( stderr, "Isochronous receive started successfully\n" );
+		{
+			fprintf( stderr, "raw1394_iso_recv_init failed: %s\n",
+				strerror( errno ) );
+			m_rawIsoMode = false;
+			success = false;
+		}
 	}
-	catch ( string exc )
+	else
 	{
-		sendEvent( exc.c_str() );
-		success = false;
+		try
+		{
+			if ( isHDV )
+				fail_neg( iec61883_mpeg2_recv_start( m_iec61883_mpeg2, channel ) );
+			else
+				fail_neg( iec61883_dv_fb_start( m_iec61883_dv, channel ) );
+			success = true;
+			fprintf( stderr, "Isochronous receive started successfully\n" );
+		}
+		catch ( string exc )
+		{
+			sendEvent( exc.c_str() );
+			success = false;
+		}
 	}
 	return success;
 }
@@ -573,7 +737,13 @@ bool iec61883Reader::StartReceive()
 
 void iec61883Reader::StopReceive()
 {
-	if ( m_iec61883_dv != NULL )
+	if ( m_rawIsoMode )
+	{
+		raw1394_iso_stop( m_handle );
+		raw1394_iso_shutdown( m_handle );
+		m_rawIsoMode = false;
+	}
+	else if ( m_iec61883_dv != NULL )
 	{
 		iec61883_dv_fb_stop( m_iec61883_dv );
 	}
