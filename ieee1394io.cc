@@ -469,9 +469,69 @@ void iec61883Reader::Close()
 	}
 }
 
+static enum raw1394_iso_disposition
+rawIsoHandler( raw1394handle_t handle, unsigned char *data,
+	unsigned int len, unsigned char channel, unsigned char tag,
+	unsigned char sy, unsigned int cycle, unsigned int dropped )
+{
+	int *counter = static_cast< int* >( raw1394_get_userdata( handle ) );
+	( *counter )++;
+	if ( *counter == 1 )
+		fprintf( stderr, "  Raw iso packet: channel=%d len=%u tag=%d "
+			"cycle=%u\n", channel, len, tag, cycle );
+	return RAW1394_ISO_OK;
+}
+
 bool iec61883Reader::StartReceive()
 {
 	bool success;
+
+	// Probe: try raw iso receive on a few channels to check if
+	// any isochronous data is on the bus.
+	fprintf( stderr, "Probing for isochronous data...\n" );
+	int probeChannels[] = { channel, 63, 0 };
+	for ( int i = 0; i < 3; i++ )
+	{
+		int ch = probeChannels[ i ];
+		raw1394handle_t probe = raw1394_new_handle_on_port( m_port );
+		if ( !probe )
+			continue;
+
+		int counter = 0;
+		raw1394_set_userdata( probe, &counter );
+
+		if ( raw1394_iso_recv_init( probe, rawIsoHandler, 64, 1024,
+			ch, RAW1394_DMA_DEFAULT, -1 ) == 0 )
+		{
+			if ( raw1394_iso_recv_start( probe, -1, -1, 0 ) == 0 )
+			{
+				// Poll for up to 500ms
+				int probe_fd = raw1394_get_fd( probe );
+				struct pollfd pfd = { probe_fd, POLLIN, 0 };
+				for ( int t = 0; t < 10; t++ )
+				{
+					int r = poll( &pfd, 1, 50 );
+					if ( r > 0 )
+						raw1394_loop_iterate( probe );
+				}
+				raw1394_iso_recv_stop( probe );
+				raw1394_iso_shutdown( probe );
+				fprintf( stderr, "  Channel %d: %d packets in 500ms\n",
+					ch, counter );
+			}
+			else
+			{
+				fprintf( stderr, "  Channel %d: iso_recv_start failed "
+					"(errno=%d: %s)\n", ch, errno, strerror( errno ) );
+			}
+		}
+		else
+		{
+			fprintf( stderr, "  Channel %d: iso_recv_init failed "
+				"(errno=%d: %s)\n", ch, errno, strerror( errno ) );
+		}
+		raw1394_destroy_handle( probe );
+	}
 
 	/* Starting iso receive */
 	fprintf( stderr, "Starting isochronous receive on channel %d\n", channel );
