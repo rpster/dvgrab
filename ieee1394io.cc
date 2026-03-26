@@ -707,10 +707,16 @@ int iec61883Connection::ForceConnection( void )
 	fprintf( stderr, "Writing oPCR[0] = 0x%08x (channel=%d, p2p=1)\n",
 		newValue, channel );
 
-	// raw1394_lock takes host byte order values
+	// raw1394_lock and raw1394_read use bus byte order (big-endian).
+	// Convert host byte order values for the compare-and-swap, and
+	// compare the result in bus byte order.
+	quadlet_t busOld = htonl( value );
+	quadlet_t busNew = htonl( newValue );
+	quadlet_t lockResult = 0;
+
 	if ( raw1394_lock( m_handle, m_node, OPCR0_ADDR,
 		RAW1394_EXTCODE_COMPARE_SWAP,
-		newValue, value, &oPCR0 ) == 0 && oPCR0 == value )
+		busNew, busOld, &lockResult ) == 0 && lockResult == busOld )
 	{
 		m_forcedoPCR = true;
 		fprintf( stderr, "Forced oPCR connection on channel %d\n", channel );
@@ -718,7 +724,7 @@ int iec61883Connection::ForceConnection( void )
 	else
 	{
 		fprintf( stderr, "oPCR compare-swap failed (expected 0x%08x, "
-			"got 0x%08x), retrying\n", value, oPCR0 );
+			"got 0x%08x), retrying\n", busOld, lockResult );
 
 		// Compare-swap failed — oPCR changed between read and swap.
 		// Re-read and retry once.
@@ -733,9 +739,12 @@ int iec61883Connection::ForceConnection( void )
 			newValue = ( newValue & ~( 0x3Fu << 24 ) ) | ( 1u << 24 );
 			newValue = ( newValue & ~( 0x3Fu << 10 ) ) | ( ( channel & 0x3F ) << 10 );
 
+			busOld = htonl( value );
+			busNew = htonl( newValue );
+
 			if ( raw1394_lock( m_handle, m_node, OPCR0_ADDR,
 				RAW1394_EXTCODE_COMPARE_SWAP,
-				newValue, value, &oPCR0 ) == 0 && oPCR0 == value )
+				busNew, busOld, &lockResult ) == 0 && lockResult == busOld )
 			{
 				m_forcedoPCR = true;
 				fprintf( stderr, "Forced oPCR connection on channel %d (retry)\n",
