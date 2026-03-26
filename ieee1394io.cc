@@ -604,26 +604,41 @@ void* iec61883Reader::ThreadProxy( void* arg )
 
 void* iec61883Reader::Thread()
 {
+	int fd = raw1394_get_fd( m_handle );
+
+	// On the firewire-core (juju) backend, isochronous data may
+	// arrive on an internal fd that differs from raw1394_get_fd().
+	// Set the main fd to non-blocking and call raw1394_loop_iterate
+	// on every iteration so isochronous packets are always processed.
+	int flags = fcntl( fd, F_GETFL );
+	if ( flags >= 0 )
+		fcntl( fd, F_SETFL, flags | O_NONBLOCK );
+
 	struct pollfd raw1394_poll;
-	int result;
-		
-	raw1394_poll.fd = raw1394_get_fd( m_handle );
+	raw1394_poll.fd = fd;
 	raw1394_poll.events = POLLIN | POLLERR | POLLHUP | POLLPRI;
 
 	while ( isRunning )
 	{
-		while ( ( result = poll( &raw1394_poll, 1, 200 ) ) < 0 )
+		// Poll for async events (bus resets) with a short timeout
+		int result = poll( &raw1394_poll, 1, 20 );
+
+		if ( result < 0 && errno != EAGAIN && errno != EINTR )
 		{
-			if ( !( errno == EAGAIN || errno == EINTR ) )
-			{
-				perror( "error: raw1394 poll" );
-				break;
-			}
+			perror( "error: raw1394 poll" );
+			break;
 		}
-		if ( result > 0 && ( ( raw1394_poll.revents & POLLIN )
-		        || ( raw1394_poll.revents & POLLPRI ) ) )
-			result = raw1394_loop_iterate( m_handle );
+
+		// Always call raw1394_loop_iterate to process isochronous
+		// packets — they may arrive on a different fd than the one
+		// returned by raw1394_get_fd().
+		raw1394_loop_iterate( m_handle );
 	}
+
+	// Restore blocking mode
+	if ( flags >= 0 )
+		fcntl( fd, F_SETFL, flags );
+
 	return NULL;
 }
 
