@@ -668,36 +668,52 @@ void DVgrab::startCapture()
 
 	sendEvent( "Waiting for %s...", m_hdv ? "HDV" : "DV" );
 
-	// this is a little unclean, checking global g_done from main.cc to allow interruption
-	while ( !g_done && m_frame == NULL )
+	if ( m_interactive )
 	{
-		timespec t = {0, 25000000L};
-		nanosleep( &t, NULL );
-	}
-
-	if ( !g_done && m_frame )
-	{
-		// OK, we have data, commence capture
-		sendEvent( "Capture Started" );
+		// In interactive mode, don't block waiting for data.  The user
+		// may need to start the transport manually or the device may
+		// take time to begin streaming.  Arm the capture and return
+		// to the interactive loop — frames will be written by the
+		// capture thread as they arrive.
 		m_captureActive = true;
 		m_total_frames = 0;
-
-		// parse the SMIL time value duration
-		if ( m_timeDuration == NULL && ! m_duration.empty() )
-			m_timeDuration = new SMIL::MediaClippingTime( m_duration, m_frame->GetFrameRate() );
 
 		if ( m_dst_file_name )
 			pthread_mutex_unlock( &capture_mutex );
 	}
 	else
 	{
-		// No data received, throw an error
-		if ( m_dst_file_name )
-			pthread_mutex_unlock( &capture_mutex );
-		const char *err = m_hdv ? "no HDV. Try again before giving up." : "no DV";
-		if ( m_hdv )
-			reset_bus( m_port );
-		throw std::string( err );
+		// this is a little unclean, checking global g_done from main.cc to allow interruption
+		while ( !g_done && m_frame == NULL )
+		{
+			timespec t = {0, 25000000L};
+			nanosleep( &t, NULL );
+		}
+
+		if ( !g_done && m_frame )
+		{
+			// OK, we have data, commence capture
+			sendEvent( "Capture Started" );
+			m_captureActive = true;
+			m_total_frames = 0;
+
+			// parse the SMIL time value duration
+			if ( m_timeDuration == NULL && ! m_duration.empty() )
+				m_timeDuration = new SMIL::MediaClippingTime( m_duration, m_frame->GetFrameRate() );
+
+			if ( m_dst_file_name )
+				pthread_mutex_unlock( &capture_mutex );
+		}
+		else
+		{
+			// No data received, throw an error
+			if ( m_dst_file_name )
+				pthread_mutex_unlock( &capture_mutex );
+			const char *err = m_hdv ? "no HDV. Try again before giving up." : "no DV";
+			if ( m_hdv )
+				reset_bus( m_port );
+			throw std::string( err );
+		}
 	}
 }
 
