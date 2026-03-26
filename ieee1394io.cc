@@ -554,6 +554,37 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 			memcpy( self->m_rawIsoFrameBuf + self->m_rawIsoFrameOffset,
 				payload, remaining );
 
+		// Diagnostic: scan first completed frame for DIF structure
+		static bool dumpedOnce = false;
+		if ( !dumpedOnce )
+		{
+			dumpedOnce = true;
+			fprintf( stderr, "DIF scan of first %d-byte frame:\n",
+				self->m_rawIsoFrameSize );
+			int headerCount = 0;
+			for ( int off = 0; off + 80 <= self->m_rawIsoFrameSize;
+				off += 80 )
+			{
+				int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
+				int dsn = self->m_rawIsoFrameBuf[off] & 0xF;
+				if ( sct == 0 )
+				{
+					int fsc = ( self->m_rawIsoFrameBuf[off+1] >> 7 ) & 1;
+					int apt = self->m_rawIsoFrameBuf[off+4] & 7;
+					fprintf( stderr, "  Header at %6d: ID0=0x%02x "
+						"DSN=%d FSC=%d APT=%d\n", off,
+						self->m_rawIsoFrameBuf[off], dsn, fsc, apt );
+					if ( ++headerCount >= 10 )
+					{
+						fprintf( stderr, "  ... (more headers)\n" );
+						break;
+					}
+				}
+			}
+			if ( headerCount == 0 )
+				fprintf( stderr, "  No header blocks (SCT=0) found!\n" );
+		}
+
 		self->Handler( self->m_rawIsoFrameBuf,
 			self->m_rawIsoFrameSize, 0 );
 
