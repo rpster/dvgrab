@@ -316,6 +316,7 @@ iec61883Reader::iec61883Reader( int p, int c, int bufSize,
 	m_iec61883_mpeg2 = NULL;
 	m_iec61883_dv = NULL;
 	m_rawIsoMode = false;
+	m_rawIsoHandle = NULL;
 	m_rawIsoFrameBuf = NULL;
 	m_rawIsoFrameSize = 0;
 	m_rawIsoFrameOffset = 0;
@@ -457,6 +458,11 @@ bool iec61883Reader::Open()
 
 void iec61883Reader::Close()
 {
+	if ( m_rawIsoHandle != NULL )
+	{
+		raw1394_destroy_handle( m_rawIsoHandle );
+		m_rawIsoHandle = NULL;
+	}
 	if ( m_rawIsoFrameBuf != NULL )
 	{
 		delete[] m_rawIsoFrameBuf;
@@ -686,32 +692,50 @@ bool iec61883Reader::StartReceive()
 		m_rawIsoSynced = false;
 		m_rawIsoMode = true;
 
-		raw1394_set_userdata( m_handle, this );
-		int maxPkt = probeMaxLen > 0 ? probeMaxLen : 1024;
-		if ( raw1394_iso_recv_init( m_handle, RawDvIsoHandler, 400,
-			maxPkt, channel, RAW1394_DMA_DEFAULT, -1 ) == 0 )
+		// Use a dedicated handle for raw iso — iec61883_dv_fb_init
+		// on m_handle sets internal iso state that conflicts.
+		m_rawIsoHandle = raw1394_new_handle_on_port( m_port );
+		if ( !m_rawIsoHandle )
 		{
-			if ( raw1394_iso_recv_start( m_handle, -1, -1, 0 ) == 0 )
-			{
-				success = true;
-				fprintf( stderr, "Raw iso receive started (frame_size=%d)\n",
-					m_rawIsoFrameSize );
-			}
-			else
-			{
-				fprintf( stderr, "raw1394_iso_recv_start failed: %s\n",
-					strerror( errno ) );
-				raw1394_iso_shutdown( m_handle );
-				m_rawIsoMode = false;
-				success = false;
-			}
+			fprintf( stderr, "Failed to open raw1394 handle for raw iso: "
+				"%s\n", strerror( errno ) );
+			m_rawIsoMode = false;
+			success = false;
 		}
 		else
 		{
-			fprintf( stderr, "raw1394_iso_recv_init failed: %s\n",
-				strerror( errno ) );
-			m_rawIsoMode = false;
-			success = false;
+			raw1394_set_userdata( m_rawIsoHandle, this );
+			int maxPkt = probeMaxLen > 0 ? probeMaxLen : 1024;
+			if ( raw1394_iso_recv_init( m_rawIsoHandle, RawDvIsoHandler,
+				400, maxPkt, channel, RAW1394_DMA_DEFAULT, -1 ) == 0 )
+			{
+				if ( raw1394_iso_recv_start( m_rawIsoHandle,
+					-1, -1, 0 ) == 0 )
+				{
+					success = true;
+					fprintf( stderr, "Raw iso receive started "
+						"(frame_size=%d)\n", m_rawIsoFrameSize );
+				}
+				else
+				{
+					fprintf( stderr, "raw1394_iso_recv_start failed: "
+						"%s\n", strerror( errno ) );
+					raw1394_iso_shutdown( m_rawIsoHandle );
+					raw1394_destroy_handle( m_rawIsoHandle );
+					m_rawIsoHandle = NULL;
+					m_rawIsoMode = false;
+					success = false;
+				}
+			}
+			else
+			{
+				fprintf( stderr, "raw1394_iso_recv_init failed: %s\n",
+					strerror( errno ) );
+				raw1394_destroy_handle( m_rawIsoHandle );
+				m_rawIsoHandle = NULL;
+				m_rawIsoMode = false;
+				success = false;
+			}
 		}
 	}
 	else
@@ -737,10 +761,10 @@ bool iec61883Reader::StartReceive()
 
 void iec61883Reader::StopReceive()
 {
-	if ( m_rawIsoMode )
+	if ( m_rawIsoMode && m_rawIsoHandle )
 	{
-		raw1394_iso_stop( m_handle );
-		raw1394_iso_shutdown( m_handle );
+		raw1394_iso_stop( m_rawIsoHandle );
+		raw1394_iso_shutdown( m_rawIsoHandle );
 		m_rawIsoMode = false;
 	}
 	else if ( m_iec61883_dv != NULL )
@@ -852,12 +876,12 @@ void* iec61883Reader::ThreadProxy( void* arg )
 
 void* iec61883Reader::Thread()
 {
-	int fd = raw1394_get_fd( m_handle );
+	// In raw iso mode, iterate on the dedicated iso handle;
+	// otherwise use the main iec61883 handle.
+	raw1394handle_t iterHandle = m_rawIsoMode ? m_rawIsoHandle : m_handle;
+	int fd = raw1394_get_fd( iterHandle );
 
-	// On the firewire-core (juju) backend, isochronous data may
-	// arrive on an internal fd that differs from raw1394_get_fd().
-	// Set the main fd to non-blocking and call raw1394_loop_iterate
-	// on every iteration so isochronous packets are always processed.
+	// Set non-blocking so raw1394_loop_iterate doesn't block forever
 	int flags = fcntl( fd, F_GETFL );
 	if ( flags >= 0 )
 		fcntl( fd, F_SETFL, flags | O_NONBLOCK );
@@ -868,7 +892,6 @@ void* iec61883Reader::Thread()
 
 	while ( isRunning )
 	{
-		// Poll for async events (bus resets) with a short timeout
 		int result = poll( &raw1394_poll, 1, 20 );
 
 		if ( result < 0 && errno != EAGAIN && errno != EINTR )
@@ -877,10 +900,7 @@ void* iec61883Reader::Thread()
 			break;
 		}
 
-		// Always call raw1394_loop_iterate to process isochronous
-		// packets — they may arrive on a different fd than the one
-		// returned by raw1394_get_fd().
-		raw1394_loop_iterate( m_handle );
+		raw1394_loop_iterate( iterHandle );
 	}
 
 	// Restore blocking mode

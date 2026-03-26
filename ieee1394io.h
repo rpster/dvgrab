@@ -132,6 +132,7 @@ private:
 
 	/// Raw iso receive mode (bypasses libiec61883 DV frame buffer)
 	bool m_rawIsoMode;
+	raw1394handle_t m_rawIsoHandle;
 	unsigned char *m_rawIsoFrameBuf;
 	int m_rawIsoFrameSize;
 	int m_rawIsoFrameOffset;
