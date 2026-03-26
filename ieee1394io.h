@@ -138,6 +138,7 @@ private:
 	int m_rawIsoFrameSize;
 	int m_rawIsoFrameOffset;
 	int m_rawIsoAlignOffset;
+	int m_rawIsoFixApt;
 	bool m_rawIsoSynced;
 
 public:

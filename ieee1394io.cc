@@ -322,6 +322,7 @@ iec61883Reader::iec61883Reader( int p, int c, int bufSize,
 	m_rawIsoFrameSize = 0;
 	m_rawIsoFrameOffset = 0;
 	m_rawIsoAlignOffset = -1;
+	m_rawIsoFixApt = -1;
 	m_rawIsoSynced = false;
 }
 
@@ -636,6 +637,23 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 	// Phase 2: Deliver aligned frames
 	while ( self->m_rawIsoFrameOffset >= self->m_rawIsoFrameSize )
 	{
+		// Fix APT field in all DIF header blocks if needed
+		if ( self->m_rawIsoFixApt >= 0 )
+		{
+			for ( int off = 0; off + 80 <= self->m_rawIsoFrameSize;
+				off += 80 )
+			{
+				int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
+				if ( sct == 0 )
+				{
+					// Byte 4 of DIF block: bits 2-0 = APT
+					self->m_rawIsoFrameBuf[off + 4] =
+						( self->m_rawIsoFrameBuf[off + 4] & 0xF8 ) |
+						( self->m_rawIsoFixApt & 0x07 );
+				}
+			}
+		}
+
 		self->Handler( self->m_rawIsoFrameBuf,
 			self->m_rawIsoFrameSize, 0 );
 
@@ -782,6 +800,10 @@ bool iec61883Reader::StartReceive()
 		m_rawIsoFrameBuf = new unsigned char[ m_rawIsoBufCapacity ];
 		m_rawIsoFrameOffset = 0;
 		m_rawIsoAlignOffset = -1;
+		// DVCPRO HD (FN>=2) cameras may report APT=1 (DVCPRO50) in
+		// the DIF header, causing decoders to use wrong shuffle tables.
+		// Fix APT to 4 (DVCPRO HD) in each frame before delivery.
+		m_rawIsoFixApt = ( probeFn >= 2 ) ? 4 : -1;
 		m_rawIsoSynced = false;
 		m_rawIsoMode = true;
 
