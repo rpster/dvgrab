@@ -788,22 +788,21 @@ bool iec61883Reader::StartReceive()
 			"(FN=%d, %d-byte packets)\n", fmtName, probeFn,
 			probeMaxLen );
 
-		// Determine frame size from FN and FDF 50/60 flag
+		// Determine frame size from FDF 50/60 flag.
+		// Note: FN=2 could be DVCPRO HD (100 Mbps, 480000/576000
+		// bytes/frame) or DVCPRO50 at 60fps.  Use the APT field
+		// from the DIF header (detected during alignment) to
+		// determine the true frame size.  Default to DVCPRO50 size
+		// since some cameras send DVCPRO50 over FireWire even when
+		// recording HD to the card.
 		bool pal = ( probeFdf & 0x80 ) != 0;
-		if ( probeFn >= 2 )
-			m_rawIsoFrameSize = pal ? DVCPROHD_PAL_FRAME_SIZE
-				: DVCPROHD_NTSC_FRAME_SIZE;
-		else
-			m_rawIsoFrameSize = pal ? DVCPRO50_PAL_FRAME_SIZE
-				: DVCPRO50_NTSC_FRAME_SIZE;
+		m_rawIsoFrameSize = pal ? DVCPRO50_PAL_FRAME_SIZE
+			: DVCPRO50_NTSC_FRAME_SIZE;
 		m_rawIsoBufCapacity = m_rawIsoFrameSize * 2;
 		m_rawIsoFrameBuf = new unsigned char[ m_rawIsoBufCapacity ];
 		m_rawIsoFrameOffset = 0;
 		m_rawIsoAlignOffset = -1;
-		// DVCPRO HD (FN>=2) cameras may report APT=1 (DVCPRO50) in
-		// the DIF header, causing decoders to use wrong shuffle tables.
-		// Fix APT to 4 (DVCPRO HD) in each frame before delivery.
-		m_rawIsoFixApt = ( probeFn >= 2 ) ? 4 : -1;
+		m_rawIsoFixApt = -1;
 		m_rawIsoSynced = false;
 		m_rawIsoMode = true;
 
