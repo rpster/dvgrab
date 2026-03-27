@@ -559,101 +559,69 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 		payload, payloadLen );
 	self->m_rawIsoFrameOffset += payloadLen;
 
-	// Phase 1: Find DIF frame alignment by scanning for the
-	// FSC=1→FSC=0 transition at a header boundary (SCT=0).
-	// Also auto-detect the true frame size from FSC consistency.
+	// Phase 1: Find DIF frame alignment.
+	// For DVCPRO HD (4 channels), FSC toggles per channel so we
+	// cannot use FSC transitions for frame boundaries.  Instead,
+	// align to the first DIF header block (SCT=0, DSN=0).
+	// For DVCPRO50 (2 channels), use FSC=1→FSC=0 transitions.
 	if ( self->m_rawIsoAlignOffset < 0 )
 	{
 		// Need at least one full frame to scan
 		if ( self->m_rawIsoFrameOffset < self->m_rawIsoFrameSize )
 			return RAW1394_ISO_OK;
 
-		// Scan for header blocks and find FSC transitions
-		int prevFsc = -1;
-		int prevFscOff = -1;
 		int alignOff = -1;
-		int detectedFrameSize = -1;
-		for ( int off = 0; off + 80 <= self->m_rawIsoFrameOffset;
-			off += 80 )
+
+		if ( self->m_rawIsoFrameSize <= DVCPRO50_PAL_FRAME_SIZE )
 		{
-			int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
-			if ( sct == 0 )
+			// DVCPRO50: use FSC transitions for alignment
+			int prevFsc = -1;
+			for ( int off = 0; off + 80 <= self->m_rawIsoFrameOffset;
+				off += 80 )
 			{
-				int fsc = ( self->m_rawIsoFrameBuf[off+1] >> 3 ) & 1;
-				if ( prevFsc >= 0 && fsc != prevFsc )
+				int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
+				if ( sct == 0 )
 				{
-					if ( alignOff < 0 )
+					int fsc = ( self->m_rawIsoFrameBuf[off+1]
+						>> 3 ) & 1;
+					if ( prevFsc == 1 && fsc == 0 )
 					{
-						// First FSC transition — this is a
-						// frame boundary.  Record size from
-						// this transition to the next one.
-						if ( fsc == 0 )
-						{
-							alignOff = off;
-							detectedFrameSize = off - prevFscOff;
-						}
-						else
-						{
-							// FSC 0→1 — note offset, keep
-							// scanning for 1→0.
-							prevFscOff = off;
-						}
-					}
-					else if ( detectedFrameSize < 0 )
-					{
-						// Second FSC transition — now we know
-						// the true frame size.
-						detectedFrameSize = off - alignOff;
-					}
-					else
+						alignOff = off;
 						break;
-				}
-				if ( prevFsc < 0 )
-					prevFscOff = off;
-				prevFsc = fsc;
-			}
-		}
-
-		if ( alignOff >= 0 )
-		{
-			self->m_rawIsoAlignOffset = alignOff;
-
-			// Update frame size if FSC detection found a
-			// different size than the CIP-based estimate.
-			if ( detectedFrameSize > 0 &&
-				detectedFrameSize != self->m_rawIsoFrameSize )
-			{
-				fprintf( stderr, "DIF frame size auto-detected: "
-					"%d bytes (was %d)\n",
-					detectedFrameSize,
-					self->m_rawIsoFrameSize );
-				self->m_rawIsoFrameSize = detectedFrameSize;
-				// Disable APT patching if frame size changed —
-				// patching APT to DVCPRO HD on a smaller frame
-				// would confuse decoders.
-				if ( self->m_rawIsoFixApt >= 0 )
-				{
-					fprintf( stderr, "APT patching disabled "
-						"(frame size changed)\n" );
-					self->m_rawIsoFixApt = -1;
+					}
+					prevFsc = fsc;
 				}
 			}
-
-			fprintf( stderr, "DIF frame alignment: offset=%d "
-				"bytes (%d DIF blocks), frame_size=%d\n",
-				alignOff, alignOff / 80,
-				self->m_rawIsoFrameSize );
-
-			// Shift data so the frame starts at alignOff
-			int remaining = self->m_rawIsoFrameOffset - alignOff;
-			if ( remaining > 0 )
-				memmove( self->m_rawIsoFrameBuf,
-					self->m_rawIsoFrameBuf + alignOff, remaining );
-			self->m_rawIsoFrameOffset = remaining;
 		}
 		else
 		{
-			// No FSC transition found — fall back to first header
+			// DVCPRO HD: FSC toggles per channel, so scan for
+			// the pattern DSN=9 followed by DSN=0 which marks
+			// a channel boundary.  Count 4 such boundaries to
+			// find a frame start (or use the first DSN=0 found
+			// after a DSN=9).
+			int prevDsn = -1;
+			for ( int off = 0; off + 80 <= self->m_rawIsoFrameOffset;
+				off += 80 )
+			{
+				int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
+				if ( sct == 0 )
+				{
+					int dsn = ( self->m_rawIsoFrameBuf[off+1]
+						>> 4 ) & 0x0F;
+					if ( prevDsn == 9 && dsn == 0 )
+					{
+						alignOff = off;
+						break;
+					}
+					prevDsn = dsn;
+				}
+			}
+		}
+
+		if ( alignOff < 0 )
+		{
+			// Fall back to first header block
 			for ( int off = 0; off + 80 <= self->m_rawIsoFrameOffset;
 				off += 80 )
 			{
@@ -664,25 +632,26 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 					break;
 				}
 			}
-			if ( alignOff >= 0 )
-			{
-				self->m_rawIsoAlignOffset = alignOff;
-				fprintf( stderr, "DIF frame alignment (header): "
-					"offset=%d bytes\n", alignOff );
-				int remaining = self->m_rawIsoFrameOffset - alignOff;
-				if ( remaining > 0 )
-					memmove( self->m_rawIsoFrameBuf,
-						self->m_rawIsoFrameBuf + alignOff,
-						remaining );
-				self->m_rawIsoFrameOffset = remaining;
-			}
-			else
-			{
-				// No headers at all — use fixed-size (no alignment)
-				self->m_rawIsoAlignOffset = 0;
-				fprintf( stderr, "DIF frame alignment: no headers "
-					"found, using unaligned\n" );
-			}
+		}
+
+		if ( alignOff >= 0 )
+		{
+			self->m_rawIsoAlignOffset = alignOff;
+			fprintf( stderr, "DIF frame alignment: offset=%d "
+				"bytes (%d DIF blocks), frame_size=%d\n",
+				alignOff, alignOff / 80,
+				self->m_rawIsoFrameSize );
+			int remaining = self->m_rawIsoFrameOffset - alignOff;
+			if ( remaining > 0 )
+				memmove( self->m_rawIsoFrameBuf,
+					self->m_rawIsoFrameBuf + alignOff, remaining );
+			self->m_rawIsoFrameOffset = remaining;
+		}
+		else
+		{
+			self->m_rawIsoAlignOffset = 0;
+			fprintf( stderr, "DIF frame alignment: no headers "
+				"found, using unaligned\n" );
 		}
 	}
 
