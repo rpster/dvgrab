@@ -730,16 +730,27 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 			}
 		}
 
-		// Fix APT field in all DIF header blocks if needed
+		// Normalize DIF header blocks for DVCPRO HD.
+		// The camera sends non-standard headers:
+		//   - FSC alternates per channel (should be same)
+		//   - Reserved bits vary (should be 111)
+		//   - APT=1 (should be 4 for DVCPRO HD)
 		if ( self->m_rawIsoFixApt >= 0 )
 		{
+			// Read FSC from first channel's header
+			int frameFsc = ( self->m_rawIsoFrameBuf[1] >> 3 ) & 1;
 			for ( int off = 0; off + 80 <= self->m_rawIsoFrameSize;
 				off += 80 )
 			{
 				int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
 				if ( sct == 0 )
 				{
-					// Byte 4 of DIF block: bits 2-0 = APT
+					// Byte 1: Dseq[7:4] | FSC[3] | reserved[2:0]
+					// Keep Dseq, fix FSC and reserved
+					self->m_rawIsoFrameBuf[off + 1] =
+						( self->m_rawIsoFrameBuf[off + 1] & 0xF0 )
+						| ( frameFsc << 3 ) | 0x07;
+					// Byte 4: bits 2-0 = APT
 					self->m_rawIsoFrameBuf[off + 4] =
 						( self->m_rawIsoFrameBuf[off + 4] & 0xF8 ) |
 						( self->m_rawIsoFixApt & 0x07 );
@@ -895,9 +906,10 @@ bool iec61883Reader::StartReceive()
 		m_rawIsoFrameBuf = new unsigned char[ m_rawIsoBufCapacity ];
 		m_rawIsoFrameOffset = 0;
 		m_rawIsoAlignOffset = -1;
-		// Disable APT patching for now — need to determine the
-		// correct APT value from VAUX data first.
-		m_rawIsoFixApt = -1;
+		// DVCPRO HD cameras may report APT=1 in DIF headers;
+		// fix to APT=4 so decoders use correct shuffle tables.
+		// Also normalizes FSC and reserved bits per channel.
+		m_rawIsoFixApt = ( probeFn >= 2 ) ? 4 : -1;
 		m_rawIsoSynced = false;
 		m_rawIsoMode = true;
 
