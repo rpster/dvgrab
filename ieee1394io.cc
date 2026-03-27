@@ -764,36 +764,25 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 			// STYPE=0x04/0x14: 1080i, STYPE=0x18: 720p
 			bool is720p = ( stype == 0x18 );
 
-			// Map byte1 signature to channel index
+			// Map byte1 signature to channel index.
+			// Group by bit2 (track pair) for both 1080i and 720p:
+			//   0x07 (bit2=1, FSC=0) → ch0
+			//   0x0F (bit2=1, FSC=1) → ch1
+			//   0x03 (bit2=0, FSC=0) → ch2
+			//   0x0B (bit2=0, FSC=1) → ch3
 			int srcPos[4] = { -1, -1, -1, -1 };
 			for ( int ch = 0; ch < 4; ch++ )
 			{
 				int sig = self->m_rawIsoFrameBuf[
 					ch * channelSize + 1 ] & 0x0F;
 				int slot;
-				if ( is720p )
+				switch ( sig )
 				{
-					// 720p: group by FSC (frame index)
-					switch ( sig )
-					{
-						case 0x07: slot = 0; break;
-						case 0x03: slot = 1; break;
-						case 0x0F: slot = 2; break;
-						case 0x0B: slot = 3; break;
-						default:   slot = ch; break;
-					}
-				}
-				else
-				{
-					// 1080i: group by bit2 (field)
-					switch ( sig )
-					{
-						case 0x07: slot = 0; break;
-						case 0x0F: slot = 1; break;
-						case 0x03: slot = 2; break;
-						case 0x0B: slot = 3; break;
-						default:   slot = ch; break;
-					}
+					case 0x07: slot = 0; break;
+					case 0x0F: slot = 1; break;
+					case 0x03: slot = 2; break;
+					case 0x0B: slot = 3; break;
+					default:   slot = ch; break;
 				}
 				srcPos[slot] = ch;
 			}
