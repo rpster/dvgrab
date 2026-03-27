@@ -628,6 +628,15 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 					detectedFrameSize,
 					self->m_rawIsoFrameSize );
 				self->m_rawIsoFrameSize = detectedFrameSize;
+				// Disable APT patching if frame size changed —
+				// patching APT to DVCPRO HD on a smaller frame
+				// would confuse decoders.
+				if ( self->m_rawIsoFixApt >= 0 )
+				{
+					fprintf( stderr, "APT patching disabled "
+						"(frame size changed)\n" );
+					self->m_rawIsoFixApt = -1;
+				}
 			}
 
 			fprintf( stderr, "DIF frame alignment: offset=%d "
