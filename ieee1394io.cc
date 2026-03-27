@@ -761,7 +761,8 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 					stype = self->m_rawIsoFrameBuf[451]
 						& 0x1f;
 			}
-			bool is720p = ( stype == 0x14 );
+			// STYPE=0x04/0x14: 1080i, STYPE=0x18: 720p
+			bool is720p = ( stype == 0x18 );
 
 			// Map byte1 signature to channel index
 			int srcPos[4] = { -1, -1, -1, -1 };
