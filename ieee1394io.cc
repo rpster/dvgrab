@@ -732,16 +732,37 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 
 		// Reorder and normalize DVCPRO HD channels.
 		// The camera sends 4 channels in arbitrary order; decoders
-		// expect them in order 0-3.  Identify channels by their
-		// original header byte 1 pattern before normalization:
-		//   0x07 (R=111, FSC=0) → channel 0
-		//   0x0F (R=111, FSC=1) → channel 1
-		//   0x03 (R=011, FSC=0) → channel 2
-		//   0x0B (R=011, FSC=1) → channel 3
+		// expect them in order 0-3.  Channel identity is determined
+		// from byte 1 bits: FSC (bit 3) and bit 2.
+		//
+		// The ordering depends on the format:
+		//   1080i: group by bit2 (field pairs)
+		//     0x07(FSC=0,b2=1)→0  0x0F(FSC=1,b2=1)→1
+		//     0x03(FSC=0,b2=0)→2  0x0B(FSC=1,b2=0)→3
+		//   720p: group by FSC (progressive frame pairs)
+		//     0x07(FSC=0,b2=1)→0  0x03(FSC=0,b2=0)→1
+		//     0x0F(FSC=1,b2=1)→2  0x0B(FSC=1,b2=0)→3
+		//
+		// Detect format from VAUX VS pack STYPE:
+		//   0x04 = 1080i, 0x14 = 720p
 		if ( self->m_rawIsoFixApt >= 0 &&
 			self->m_rawIsoFrameSize >= 480000 )
 		{
 			int channelSize = self->m_rawIsoFrameSize / 4;
+
+			// Read STYPE from VAUX VS pack (byte 3 of pack at
+			// frame offset 80*5 + 48 + 0, i.e. offset 448)
+			int stype = 0x04; // default to 1080i
+			if ( self->m_rawIsoFrameSize > 451 )
+			{
+				unsigned char vsHdr =
+					self->m_rawIsoFrameBuf[448];
+				if ( vsHdr == 0x60 )
+					stype = self->m_rawIsoFrameBuf[451]
+						& 0x1f;
+			}
+			bool is720p = ( stype == 0x14 );
+
 			// Map byte1 signature to channel index
 			int srcPos[4] = { -1, -1, -1, -1 };
 			for ( int ch = 0; ch < 4; ch++ )
@@ -749,13 +770,29 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 				int sig = self->m_rawIsoFrameBuf[
 					ch * channelSize + 1 ] & 0x0F;
 				int slot;
-				switch ( sig )
+				if ( is720p )
 				{
-					case 0x07: slot = 0; break;
-					case 0x0F: slot = 1; break;
-					case 0x03: slot = 2; break;
-					case 0x0B: slot = 3; break;
-					default:   slot = ch; break;
+					// 720p: group by FSC (frame index)
+					switch ( sig )
+					{
+						case 0x07: slot = 0; break;
+						case 0x03: slot = 1; break;
+						case 0x0F: slot = 2; break;
+						case 0x0B: slot = 3; break;
+						default:   slot = ch; break;
+					}
+				}
+				else
+				{
+					// 1080i: group by bit2 (field)
+					switch ( sig )
+					{
+						case 0x07: slot = 0; break;
+						case 0x0F: slot = 1; break;
+						case 0x03: slot = 2; break;
+						case 0x0B: slot = 3; break;
+						default:   slot = ch; break;
+					}
 				}
 				srcPos[slot] = ch;
 			}
@@ -770,9 +807,11 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 			if ( needReorder )
 			{
 				if ( !self->m_rawIsoSynced )
-					fprintf( stderr, "Reordering DVCPRO HD "
-						"channels: [%d,%d,%d,%d] → "
-						"[0,1,2,3]\n",
+					fprintf( stderr, "DVCPRO HD %s (STYPE="
+						"0x%02x): reordering channels "
+						"[%d,%d,%d,%d] → [0,1,2,3]\n",
+						is720p ? "720p" : "1080i",
+						stype,
 						srcPos[0], srcPos[1],
 						srcPos[2], srcPos[3] );
 				// Use space at end of buffer as temp
