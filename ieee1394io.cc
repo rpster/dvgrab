@@ -561,6 +561,7 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 
 	// Phase 1: Find DIF frame alignment by scanning for the
 	// FSC=1→FSC=0 transition at a header boundary (SCT=0).
+	// Also auto-detect the true frame size from FSC consistency.
 	if ( self->m_rawIsoAlignOffset < 0 )
 	{
 		// Need at least one full frame to scan
@@ -569,7 +570,9 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 
 		// Scan for header blocks and find FSC transitions
 		int prevFsc = -1;
+		int prevFscOff = -1;
 		int alignOff = -1;
+		int detectedFrameSize = -1;
 		for ( int off = 0; off + 80 <= self->m_rawIsoFrameOffset;
 			off += 80 )
 		{
@@ -577,11 +580,36 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 			if ( sct == 0 )
 			{
 				int fsc = ( self->m_rawIsoFrameBuf[off+1] >> 3 ) & 1;
-				if ( prevFsc == 1 && fsc == 0 )
+				if ( prevFsc >= 0 && fsc != prevFsc )
 				{
-					alignOff = off;
-					break;
+					if ( alignOff < 0 )
+					{
+						// First FSC transition — this is a
+						// frame boundary.  Record size from
+						// this transition to the next one.
+						if ( fsc == 0 )
+						{
+							alignOff = off;
+							detectedFrameSize = off - prevFscOff;
+						}
+						else
+						{
+							// FSC 0→1 — note offset, keep
+							// scanning for 1→0.
+							prevFscOff = off;
+						}
+					}
+					else if ( detectedFrameSize < 0 )
+					{
+						// Second FSC transition — now we know
+						// the true frame size.
+						detectedFrameSize = off - alignOff;
+					}
+					else
+						break;
 				}
+				if ( prevFsc < 0 )
+					prevFscOff = off;
 				prevFsc = fsc;
 			}
 		}
@@ -589,8 +617,23 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 		if ( alignOff >= 0 )
 		{
 			self->m_rawIsoAlignOffset = alignOff;
-			fprintf( stderr, "DIF frame alignment: offset=%d bytes "
-				"(%d DIF blocks)\n", alignOff, alignOff / 80 );
+
+			// Update frame size if FSC detection found a
+			// different size than the CIP-based estimate.
+			if ( detectedFrameSize > 0 &&
+				detectedFrameSize != self->m_rawIsoFrameSize )
+			{
+				fprintf( stderr, "DIF frame size auto-detected: "
+					"%d bytes (was %d)\n",
+					detectedFrameSize,
+					self->m_rawIsoFrameSize );
+				self->m_rawIsoFrameSize = detectedFrameSize;
+			}
+
+			fprintf( stderr, "DIF frame alignment: offset=%d "
+				"bytes (%d DIF blocks), frame_size=%d\n",
+				alignOff, alignOff / 80,
+				self->m_rawIsoFrameSize );
 
 			// Shift data so the frame starts at alignOff
 			int remaining = self->m_rawIsoFrameOffset - alignOff;
