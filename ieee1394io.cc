@@ -637,6 +637,44 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 	// Phase 2: Deliver aligned frames
 	while ( self->m_rawIsoFrameOffset >= self->m_rawIsoFrameSize )
 	{
+		// Dump DIF header info for first frame
+		if ( !self->m_rawIsoSynced )
+		{
+			self->m_rawIsoSynced = true;
+			fprintf( stderr, "=== First frame DIF structure "
+				"(frame_size=%d) ===\n",
+				self->m_rawIsoFrameSize );
+			int seqNum = 0;
+			for ( int off = 0; off + 80 <= self->m_rawIsoFrameSize;
+				off += 80 )
+			{
+				int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
+				if ( sct == 0 )
+				{
+					int dsn = self->m_rawIsoFrameBuf[off + 1] & 0x0F;
+					int fsc = ( self->m_rawIsoFrameBuf[off + 1] >> 4 ) & 1;
+					int apt = self->m_rawIsoFrameBuf[off + 4] & 0x07;
+					int tf1a = ( self->m_rawIsoFrameBuf[off + 4] >> 5 ) & 1;
+					fprintf( stderr, "  Seq %2d @ offset %6d: "
+						"SCT=0 DSN=%d FSC=%d APT=%d TF1a=%d "
+						"bytes[0..7]: %02x %02x %02x %02x %02x "
+						"%02x %02x %02x\n",
+						seqNum, off, dsn, fsc, apt, tf1a,
+						self->m_rawIsoFrameBuf[off],
+						self->m_rawIsoFrameBuf[off+1],
+						self->m_rawIsoFrameBuf[off+2],
+						self->m_rawIsoFrameBuf[off+3],
+						self->m_rawIsoFrameBuf[off+4],
+						self->m_rawIsoFrameBuf[off+5],
+						self->m_rawIsoFrameBuf[off+6],
+						self->m_rawIsoFrameBuf[off+7] );
+					seqNum++;
+				}
+			}
+			fprintf( stderr, "=== Total DIF sequences: %d ===\n",
+				seqNum );
+		}
+
 		// Fix APT field in all DIF header blocks if needed
 		if ( self->m_rawIsoFixApt >= 0 )
 		{
