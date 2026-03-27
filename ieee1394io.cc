@@ -731,65 +731,43 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 		}
 
 		// Reorder and normalize DVCPRO HD channels.
-		// Detect format from VAUX VS pack STYPE:
-		//   0x14 = 1080i,  0x18 = 720p
 		//
-		// 1080i (1 frame per DIF frame):
-		//   Group by bit2 (field pairs), same FSC for all channels
-		//   0x07→0  0x0F→1  0x03→2  0x0B→3
+		// The camera sends 4 channels per DIF frame (480000 bytes).
+		// ffmpeg's 720p decoder reads 240000 bytes per frame
+		// (n_difchan=2), so it naturally splits our 480000 bytes
+		// into Frame A (ch0+1) and Frame B (ch2+3).
 		//
-		// 720p (2 progressive frames per DIF frame):
-		//   Group by FSC (progressive frame pairs)
-		//   Frame A (FSC=0): 0x07→0  0x03→1
-		//   Frame B (FSC=1): 0x0F→2  0x0B→3
-		//   FSC must DIFFER between frame pairs for decoder
+		// Channel identity from camera byte1 lower nibble:
+		//   0x07: FSC=0, FSP=1  →  channel 0
+		//   0x0F: FSC=1, FSP=1  →  channel 1
+		//   0x03: FSC=0, FSP=0  →  channel 2
+		//   0x0B: FSC=1, FSP=0  →  channel 3
+		//
+		// FSP (bit 2) is critical for 720p: ffmpeg's decoder
+		// checks (buf[1] & 0x0C) to apply macroblock Y-coordinate
+		// displacement for Frame B.  Channels 2,3 must have FSP=0.
+		//
+		// Order by FSP (bit2): same mapping for 1080i and 720p.
 		if ( self->m_rawIsoFixApt >= 0 &&
 			self->m_rawIsoFrameSize >= 480000 )
 		{
 			int channelSize = self->m_rawIsoFrameSize / 4;
 
-			// Read STYPE from VAUX VS pack
-			int stype = 0x14; // default to 1080i
-			if ( self->m_rawIsoFrameSize > 451 )
-			{
-				unsigned char vsHdr =
-					self->m_rawIsoFrameBuf[448];
-				if ( vsHdr == 0x60 )
-					stype = self->m_rawIsoFrameBuf[451]
-						& 0x1f;
-			}
-			bool is720p = ( stype == 0x18 );
-
 			// Map byte1 signature to channel index
+			// (group by FSP/bit2, same for all formats)
 			int srcPos[4] = { -1, -1, -1, -1 };
 			for ( int ch = 0; ch < 4; ch++ )
 			{
 				int sig = self->m_rawIsoFrameBuf[
 					ch * channelSize + 1 ] & 0x0F;
 				int slot;
-				if ( is720p )
+				switch ( sig )
 				{
-					// 720p: group by FSC
-					switch ( sig )
-					{
-						case 0x07: slot = 0; break;
-						case 0x03: slot = 1; break;
-						case 0x0F: slot = 2; break;
-						case 0x0B: slot = 3; break;
-						default:   slot = ch; break;
-					}
-				}
-				else
-				{
-					// 1080i: group by bit2
-					switch ( sig )
-					{
-						case 0x07: slot = 0; break;
-						case 0x0F: slot = 1; break;
-						case 0x03: slot = 2; break;
-						case 0x0B: slot = 3; break;
-						default:   slot = ch; break;
-					}
+					case 0x07: slot = 0; break;
+					case 0x0F: slot = 1; break;
+					case 0x03: slot = 2; break;
+					case 0x0B: slot = 3; break;
+					default:   slot = ch; break;
 				}
 				srcPos[slot] = ch;
 			}
@@ -803,14 +781,6 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 			}
 			if ( needReorder )
 			{
-				if ( !self->m_rawIsoSynced )
-					fprintf( stderr, "DVCPRO HD %s (STYPE="
-						"0x%02x): reordering channels "
-						"[%d,%d,%d,%d] → [0,1,2,3]\n",
-						is720p ? "720p" : "1080i",
-						stype,
-						srcPos[0], srcPos[1],
-						srcPos[2], srcPos[3] );
 				unsigned char *temp = self->m_rawIsoFrameBuf
 					+ 2 * self->m_rawIsoFrameSize;
 				memcpy( temp, self->m_rawIsoFrameBuf,
@@ -822,23 +792,16 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 						channelSize );
 			}
 
-			// Normalize headers: fix R=111 and APT.
-			// For 720p: preserve FSC per-channel (frame A vs B).
-			// For 1080i: set all FSC to same value.
-			int fscA = -1, fscB = -1;
-			if ( is720p )
-			{
-				// After reorder: ch0,1 = frame A, ch2,3 = frame B
-				fscA = ( self->m_rawIsoFrameBuf[1] >> 3 ) & 1;
-				fscB = ( self->m_rawIsoFrameBuf[
-					2 * channelSize + 1] >> 3 ) & 1;
-				if ( fscA == fscB ) fscB = 1 - fscA;
-			}
-			else
-			{
-				fscA = ( self->m_rawIsoFrameBuf[1] >> 3 ) & 1;
-				fscB = fscA;
-			}
+			// Normalize DIF headers: set correct FSC, FSP, R,
+			// and APT per channel index.
+			//
+			// Per-channel byte1 lower nibble (from ffmpeg dvenc.c):
+			//   Ch0: FSC=0 FSP=1 R=11 → 0x07
+			//   Ch1: FSC=1 FSP=1 R=11 → 0x0F
+			//   Ch2: FSC=0 FSP=0 R=11 → 0x03
+			//   Ch3: FSC=1 FSP=0 R=11 → 0x0B
+			static const unsigned char chLower[4] =
+				{ 0x07, 0x0F, 0x03, 0x0B };
 
 			for ( int off = 0; off + 80 <=
 				self->m_rawIsoFrameSize; off += 80 )
@@ -847,12 +810,12 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 					>> 5 ) & 7;
 				if ( sct == 0 )
 				{
-					int fsc = ( off < 2 * channelSize )
-						? fscA : fscB;
+					int chIdx = off / channelSize;
+					if ( chIdx > 3 ) chIdx = 3;
 					self->m_rawIsoFrameBuf[off + 1] =
 						( self->m_rawIsoFrameBuf[off + 1]
 						& 0xF0 )
-						| ( fsc << 3 ) | 0x07;
+						| chLower[chIdx];
 					self->m_rawIsoFrameBuf[off + 4] =
 						( self->m_rawIsoFrameBuf[off + 4]
 						& 0xF8 )
