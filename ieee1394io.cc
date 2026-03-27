@@ -576,7 +576,7 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 			int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
 			if ( sct == 0 )
 			{
-				int fsc = ( self->m_rawIsoFrameBuf[off+1] >> 7 ) & 1;
+				int fsc = ( self->m_rawIsoFrameBuf[off+1] >> 3 ) & 1;
 				if ( prevFsc == 1 && fsc == 0 )
 				{
 					alignOff = off;
@@ -651,8 +651,8 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 				int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
 				if ( sct == 0 )
 				{
-					int dsn = self->m_rawIsoFrameBuf[off + 1] & 0x0F;
-					int fsc = ( self->m_rawIsoFrameBuf[off + 1] >> 4 ) & 1;
+					int dsn = ( self->m_rawIsoFrameBuf[off + 1] >> 4 ) & 0x0F;
+					int fsc = ( self->m_rawIsoFrameBuf[off + 1] >> 3 ) & 1;
 					int apt = self->m_rawIsoFrameBuf[off + 4] & 0x07;
 					int tf1a = ( self->m_rawIsoFrameBuf[off + 4] >> 5 ) & 1;
 					fprintf( stderr, "  Seq %2d @ offset %6d: "
