@@ -694,6 +694,40 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 			}
 			fprintf( stderr, "=== Total DIF sequences: %d ===\n",
 				seqNum );
+
+			// Dump VAUX packs from first DIF sequence to
+			// identify video format (VS=0x60, VSC=0x61).
+			// VAUX blocks are at offsets 240, 320, 400
+			// (after 1 header + 2 subcode blocks).
+			fprintf( stderr, "=== VAUX packs (first "
+				"sequence) ===\n" );
+			for ( int vb = 0; vb < 3; vb++ )
+			{
+				int voff = ( 3 + vb ) * 80 + 3;
+				if ( voff + 77 > self->m_rawIsoFrameSize )
+					break;
+				// Each VAUX block has 15 packs × 5 bytes
+				for ( int p = 0; p < 15; p++ )
+				{
+					int poff = voff + p * 5;
+					unsigned char hdr =
+						self->m_rawIsoFrameBuf[poff];
+					if ( hdr == 0x60 || hdr == 0x61 )
+					{
+						fprintf( stderr,
+							"  Pack 0x%02x @ %d:"
+							" %02x %02x %02x %02x"
+							" %02x\n",
+							hdr, poff,
+							self->m_rawIsoFrameBuf[poff],
+							self->m_rawIsoFrameBuf[poff+1],
+							self->m_rawIsoFrameBuf[poff+2],
+							self->m_rawIsoFrameBuf[poff+3],
+							self->m_rawIsoFrameBuf[poff+4]
+						);
+					}
+				}
+			}
 		}
 
 		// Fix APT field in all DIF header blocks if needed
@@ -861,9 +895,9 @@ bool iec61883Reader::StartReceive()
 		m_rawIsoFrameBuf = new unsigned char[ m_rawIsoBufCapacity ];
 		m_rawIsoFrameOffset = 0;
 		m_rawIsoAlignOffset = -1;
-		// DVCPRO HD cameras may report APT=1 in DIF headers;
-		// fix to APT=4 so decoders use correct shuffle tables.
-		m_rawIsoFixApt = ( probeFn >= 2 ) ? 4 : -1;
+		// Disable APT patching for now — need to determine the
+		// correct APT value from VAUX data first.
+		m_rawIsoFixApt = -1;
 		m_rawIsoSynced = false;
 		m_rawIsoMode = true;
 
