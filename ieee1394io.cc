@@ -730,30 +730,99 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 			}
 		}
 
-		// Normalize DIF header blocks for DVCPRO HD.
-		// The camera sends non-standard headers:
-		//   - FSC alternates per channel (should be same)
-		//   - Reserved bits vary (should be 111)
-		//   - APT=1 (should be 4 for DVCPRO HD)
-		if ( self->m_rawIsoFixApt >= 0 )
+		// Reorder and normalize DVCPRO HD channels.
+		// The camera sends 4 channels in arbitrary order; decoders
+		// expect them in order 0-3.  Identify channels by their
+		// original header byte 1 pattern before normalization:
+		//   0x07 (R=111, FSC=0) → channel 0
+		//   0x0F (R=111, FSC=1) → channel 1
+		//   0x03 (R=011, FSC=0) → channel 2
+		//   0x0B (R=011, FSC=1) → channel 3
+		if ( self->m_rawIsoFixApt >= 0 &&
+			self->m_rawIsoFrameSize >= 480000 )
 		{
-			// Read FSC from first channel's header
-			int frameFsc = ( self->m_rawIsoFrameBuf[1] >> 3 ) & 1;
-			for ( int off = 0; off + 80 <= self->m_rawIsoFrameSize;
-				off += 80 )
+			int channelSize = self->m_rawIsoFrameSize / 4;
+			// Map byte1 signature to channel index
+			int srcPos[4] = { -1, -1, -1, -1 };
+			for ( int ch = 0; ch < 4; ch++ )
 			{
-				int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
+				int sig = self->m_rawIsoFrameBuf[
+					ch * channelSize + 1 ] & 0x0F;
+				int slot;
+				switch ( sig )
+				{
+					case 0x07: slot = 0; break;
+					case 0x0F: slot = 1; break;
+					case 0x03: slot = 2; break;
+					case 0x0B: slot = 3; break;
+					default:   slot = ch; break;
+				}
+				srcPos[slot] = ch;
+			}
+
+			// Reorder if needed
+			bool needReorder = false;
+			for ( int i = 0; i < 4; i++ )
+			{
+				if ( srcPos[i] < 0 ) srcPos[i] = i;
+				if ( srcPos[i] != i ) needReorder = true;
+			}
+			if ( needReorder )
+			{
+				if ( !self->m_rawIsoSynced )
+					fprintf( stderr, "Reordering DVCPRO HD "
+						"channels: [%d,%d,%d,%d] → "
+						"[0,1,2,3]\n",
+						srcPos[0], srcPos[1],
+						srcPos[2], srcPos[3] );
+				// Use space at end of buffer as temp
+				unsigned char *temp = self->m_rawIsoFrameBuf
+					+ 2 * self->m_rawIsoFrameSize;
+				memcpy( temp, self->m_rawIsoFrameBuf,
+					self->m_rawIsoFrameSize );
+				for ( int i = 0; i < 4; i++ )
+					memcpy( self->m_rawIsoFrameBuf
+						+ i * channelSize,
+						temp + srcPos[i] * channelSize,
+						channelSize );
+			}
+
+			// Normalize headers: consistent FSC, R=111, APT=4
+			// Use FSC=0 for even frames, FSC=1 for odd
+			// (toggle based on m_rawIsoSynced counter)
+			int frameFsc = ( self->m_rawIsoFrameBuf[1] >> 3 ) & 1;
+			for ( int off = 0; off + 80 <=
+				self->m_rawIsoFrameSize; off += 80 )
+			{
+				int sct = ( self->m_rawIsoFrameBuf[off]
+					>> 5 ) & 7;
 				if ( sct == 0 )
 				{
-					// Byte 1: Dseq[7:4] | FSC[3] | reserved[2:0]
-					// Keep Dseq, fix FSC and reserved
 					self->m_rawIsoFrameBuf[off + 1] =
-						( self->m_rawIsoFrameBuf[off + 1] & 0xF0 )
+						( self->m_rawIsoFrameBuf[off + 1]
+						& 0xF0 )
 						| ( frameFsc << 3 ) | 0x07;
-					// Byte 4: bits 2-0 = APT
 					self->m_rawIsoFrameBuf[off + 4] =
-						( self->m_rawIsoFrameBuf[off + 4] & 0xF8 ) |
-						( self->m_rawIsoFixApt & 0x07 );
+						( self->m_rawIsoFrameBuf[off + 4]
+						& 0xF8 )
+						| ( self->m_rawIsoFixApt & 0x07 );
+				}
+			}
+		}
+		else if ( self->m_rawIsoFixApt >= 0 )
+		{
+			// Non-HD: just fix APT
+			for ( int off = 0; off + 80 <=
+				self->m_rawIsoFrameSize; off += 80 )
+			{
+				int sct = ( self->m_rawIsoFrameBuf[off]
+					>> 5 ) & 7;
+				if ( sct == 0 )
+				{
+					self->m_rawIsoFrameBuf[off + 4] =
+						( self->m_rawIsoFrameBuf[off + 4]
+						& 0xF8 )
+						| ( self->m_rawIsoFixApt & 0x07 );
 				}
 			}
 		}
