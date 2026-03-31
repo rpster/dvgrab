@@ -940,6 +940,11 @@ void DVgrab::writeFrame()
 			m_lockPending = false;
 		}
 
+		// Use .mxf extension for DVCPRO HD recordings
+		if ( ! m_writer->FileIsOpen() &&
+		     m_frame->GetDataLen() >= DVCPROHD_NTSC_FRAME_SIZE )
+			m_writer->SetExtension( ".mxf" );
+
 		if ( ! m_writer->WriteFrame( m_frame ) )
 		{
 			pthread_mutex_unlock( &capture_mutex );
