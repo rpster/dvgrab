@@ -860,7 +860,9 @@ bool iec61883Reader::StartReceive()
 	bool success;
 
 	// Probe: try raw iso receive to check for isochronous data and
-	// detect stream parameters.
+	// detect stream parameters.  Retry if no packets found (the
+	// device may need time to start isochronous output after
+	// entering record mode).
 	fprintf( stderr, "Probing for isochronous data on channel %d...\n",
 		channel );
 	int probeFn = -1;
@@ -868,7 +870,16 @@ bool iec61883Reader::StartReceive()
 	int probeFdf = -1;
 	int probePackets = 0;
 	int probeMaxLen = 0;
+	for ( int attempt = 0; attempt < 5; attempt++ )
 	{
+		if ( attempt > 0 )
+		{
+			fprintf( stderr, "  Retrying probe (attempt %d)...\n",
+				attempt + 1 );
+			timespec t = {0, 500000000L};
+			nanosleep( &t, NULL );
+		}
+
 		raw1394handle_t probe = raw1394_new_handle_on_port( m_port );
 		if ( probe )
 		{
@@ -898,6 +909,10 @@ bool iec61883Reader::StartReceive()
 			raw1394_destroy_handle( probe );
 		}
 
+		if ( probePackets > 0 )
+			break;
+	}
+	{
 		// Second probe pass to capture CIP details
 		if ( probePackets > 0 )
 		{
