@@ -48,8 +48,6 @@ using std::endl;
 #include "avi.h"
 #include "dvgrab.h"
 #include "raw1394util.h"
-#include <libraw1394/raw1394.h>
-#include <poll.h>
 #include "smiltime.h"
 #include "stringutils.h"
 #include "v4l2reader.h"
@@ -152,19 +150,16 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 		
 		if ( m_guid )
 		{
-			// When -record-start is active, defer connection and reader
-			// creation until after recording is detected.  Creating them
-			// now (before the camera is recording) means the probe finds
-			// no isochronous data and falls back to DV25 mode, which
-			// can't handle DVCPRO50/HD streams.
-			if ( ! m_waitRecordStart )
-			{
-				m_connection = new iec61883Connection( m_port, m_node );
-				if ( ! m_connection )
-					throw std::string( "failed to establish isochronous connection" );
-				m_channel = m_connection->GetChannel();
-				sendEvent( "Established connection over channel %d", m_channel );
-			}
+			// Always create the connection — the CMP bus activity
+			// primes the device to start isochronous output when it
+			// enters record mode.  But defer the reader creation when
+			// -record-start is active so the probe sees live data and
+			// selects the correct receive mode (raw ISO for DVCPRO HD).
+			m_connection = new iec61883Connection( m_port, m_node );
+			if ( ! m_connection )
+				throw std::string( "failed to establish isochronous connection" );
+			m_channel = m_connection->GetChannel();
+			sendEvent( "Established connection over channel %d", m_channel );
 		}
 		if ( ! m_waitRecordStart )
 		{
@@ -670,65 +665,12 @@ void DVgrab::startCapture()
 			// Give the camera time to start isochronous output
 			// after entering record mode.
 			sendEvent( "Waiting for isochronous stream to start..." );
-			timespec t = {2, 0};
+			timespec t = {3, 0};
 			nanosleep( &t, NULL );
 
-			// Diagnostic: probe multiple channels to find where data
-			// is actually flowing.
-			{
-				struct ProbeCounter {
-					static enum raw1394_iso_disposition handler(
-						raw1394handle_t h, unsigned char *d, unsigned int l,
-						unsigned char ch, unsigned char tg, unsigned char s,
-						unsigned int cy, unsigned int dr )
-					{
-						int *cnt = static_cast<int*>( raw1394_get_userdata( h ) );
-						if ( l > 8 ) (*cnt)++;
-						return RAW1394_ISO_OK;
-					}
-				};
-				int probeChs[] = { 63, 35, 0, 1, 2, 3 };
-				int numProbe = sizeof(probeChs) / sizeof(probeChs[0]);
-				for ( int i = 0; i < numProbe; i++ )
-				{
-					int ch = probeChs[i];
-					int counter = 0;
-					raw1394handle_t ph = raw1394_new_handle_on_port( m_port );
-					if ( !ph ) continue;
-					raw1394_set_userdata( ph, &counter );
-					if ( raw1394_iso_recv_init( ph, ProbeCounter::handler,
-						64, 2048, ch, RAW1394_DMA_DEFAULT, -1 ) == 0 )
-					{
-						if ( raw1394_iso_recv_start( ph, -1, -1, 0 ) == 0 )
-						{
-							int fd = raw1394_get_fd( ph );
-							struct pollfd pfd = { fd, POLLIN, 0 };
-							for ( int t = 0; t < 10; t++ )
-							{
-								int r = poll( &pfd, 1, 50 );
-								if ( r > 0 )
-									raw1394_loop_iterate( ph );
-							}
-							raw1394_iso_stop( ph );
-						}
-						raw1394_iso_shutdown( ph );
-					}
-					raw1394_destroy_handle( ph );
-					fprintf( stderr, "  Channel %d: %d packets\n",
-						ch, counter );
-				}
-			}
-
-			// Now create the connection and reader for the first time
-			// (deferred from constructor so the probe sees live data).
-			m_connection = new iec61883Connection( m_port, m_node );
-			if ( m_connection )
-			{
-				m_channel = m_connection->GetChannel();
-				sendEvent( "Established connection over channel %d",
-					m_channel );
-			}
-
+			// Create the reader now that the camera is recording.
+			// The connection was already created in the constructor
+			// (CMP bus activity primes the device for output).
 			int frameSize = m_hdv ? DATA_BUFFER_LEN : DV_FRAME_BUFFER_LEN;
 			int totalMB = ( (long long) m_buffers * frameSize ) / ( 1024 * 1024 );
 			sendEvent( "Allocating %d frame buffers (%d KB each, ~%d MB total)",
