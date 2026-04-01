@@ -150,14 +150,25 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 		
 		if ( m_guid )
 		{
-			m_connection = new iec61883Connection( m_port, m_node );
-			if ( ! m_connection )
-				throw std::string( "failed to establish isochronous connection" );
-			m_channel = m_connection->GetChannel();
-			sendEvent( "Established connection over channel %d", m_channel );
+			// When -record-start is active, defer connection and reader
+			// creation until after recording is detected.  Creating them
+			// now (before the camera is recording) means the probe finds
+			// no isochronous data and falls back to DV25 mode, which
+			// can't handle DVCPRO50/HD streams.
+			if ( ! m_waitRecordStart )
+			{
+				m_connection = new iec61883Connection( m_port, m_node );
+				if ( ! m_connection )
+					throw std::string( "failed to establish isochronous connection" );
+				m_channel = m_connection->GetChannel();
+				sendEvent( "Established connection over channel %d", m_channel );
+			}
 		}
-		m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
-			this->testCaptureProxy, this, m_hdv );
+		if ( ! m_waitRecordStart )
+		{
+			m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
+				this->testCaptureProxy, this, m_hdv );
+		}
 	}
 	else if ( m_v4l2 )
 	{
@@ -654,24 +665,27 @@ void DVgrab::startCapture()
 		{
 			waitForRecordStart();
 
-			// Re-establish the isochronous connection.  The device
-			// may have reset its output plug when entering record
-			// mode, stopping isochronous output on the old channel.
+			// Give the camera time to start isochronous output
+			// after entering record mode.
+			sendEvent( "Waiting for isochronous stream to start..." );
+			timespec t = {2, 0};
+			nanosleep( &t, NULL );
+
+			// Now create the connection and reader for the first time
+			// (deferred from constructor so the probe sees live data).
+			m_connection = new iec61883Connection( m_port, m_node );
 			if ( m_connection )
 			{
-				delete m_connection;
-				m_connection = new iec61883Connection( m_port, m_node );
-				int newChannel = m_connection->GetChannel();
-				if ( newChannel >= 0 )
-					m_channel = newChannel;
-				sendEvent( "Re-established connection over channel %d",
+				m_channel = m_connection->GetChannel();
+				sendEvent( "Established connection over channel %d",
 					m_channel );
 			}
 
-			// Restart reader to probe the now-active stream.
-			m_reader->StopThread();
-			pthread_join( capture_thread, NULL );
-			delete m_reader;
+			int frameSize = m_hdv ? DATA_BUFFER_LEN : DV_FRAME_BUFFER_LEN;
+			int totalMB = ( (long long) m_buffers * frameSize ) / ( 1024 * 1024 );
+			sendEvent( "Allocating %d frame buffers (%d KB each, ~%d MB total)",
+				m_buffers, frameSize / 1024, totalMB );
+
 			m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
 				this->testCaptureProxy, this, m_hdv );
 			pthread_create( &capture_thread, NULL, captureThread, this );

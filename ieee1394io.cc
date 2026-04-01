@@ -1351,39 +1351,6 @@ int iec61883Connection::ForceConnection( void )
 		}
 	}
 
-	// Write to oPCR[0] to establish a point-to-point connection.
-	// Per CMP (IEC 61883-1), incrementing the p2p connection counter
-	// tells the device to start isochronous output on the specified
-	// channel.  Without this write, the device may not stream data.
-	{
-		quadlet_t curVal = ntohl( m_originaloPCR );
-		int curP2P = ( curVal >> 24 ) & 0x3F;
-
-		// Build new oPCR value: increment p2p count, set channel
-		quadlet_t newVal = curVal;
-		// Clear p2p count (bits 29-24) and channel (bits 15-10)
-		newVal &= ~( 0x3FU << 24 );
-		newVal &= ~( 0x3FU << 10 );
-		// Set p2p count to current + 1
-		newVal |= ( ( curP2P + 1 ) & 0x3F ) << 24;
-		// Set channel to our target
-		newVal |= ( bestChannel & 0x3F ) << 10;
-
-		quadlet_t writeVal = htonl( newVal );
-		if ( raw1394_lock( m_handle, m_node, OPCR0_ADDR,
-			RAW1394_EXTCODE_COMPARE_SWAP,
-			htonl( newVal ), m_originaloPCR, &writeVal ) == 0 )
-		{
-			fprintf( stderr, "oPCR[0] write: 0x%08x -> 0x%08x (p2p=%d, ch=%d)\n",
-				curVal, newVal, curP2P + 1, bestChannel );
-			m_forcedoPCR = true;
-		}
-		else
-		{
-			fprintf( stderr, "oPCR[0] write failed: %s\n", strerror( errno ) );
-		}
-	}
-
 	fprintf( stderr, "Using %s channel %d\n",
 		foundActive ? "broadcast" : "fallback", bestChannel );
 
