@@ -75,13 +75,14 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 		m_guid( 0 ), m_timesys( false ), m_connection( 0 ), m_raw_pipe( false ),
 		m_no_stop( false ), m_timecode( false ), m_lockstep( false ), m_lockPending( false ),
 		m_lockstep_maxdrops( DEFAULT_LOCKSTEP_MAXDROPS ), m_lockstep_totaldrops( DEFAULT_LOCKSTEP_TOTALDROPS ),
-		m_captureActive( false ), m_avc( 0 ), m_reader( 0 ), m_hdv( false ), m_showstatus( false ),
+		m_captureActive( false ), m_hasCaptured( false ), m_avc( 0 ), m_reader( 0 ), m_hdv( false ), m_showstatus( false ),
 		m_isLastTimeCodeSet( false ), m_isLastRecDateSet( false ), m_v4l2( false ), m_jvc_p25( false ),
 		m_isRecordMode( false ), m_waitRecordStart( false ), m_isRewindFirst( false ),
 		m_timeSplit(0), m_srt( false ), m_isNewFile(false)
 {
 	m_frame = 0;
 	m_writer = 0;
+	m_transportStatus = 0;
 	m_input_file_name = NULL;
 	m_dst_file_name = NULL;
 
@@ -100,9 +101,12 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 		m_buffers = MAX_BUFFERS;
 	}
 
-	// -record-start implies -recordonly
+	// -record-start implies -recordonly and -showstatus
 	if ( m_waitRecordStart )
+	{
 		m_isRecordMode = true;
+		m_showstatus = true;
+	}
 
 	if ( m_v4l2 )
 	{
@@ -128,14 +132,17 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 	pthread_mutex_init( &capture_mutex, NULL );
 	if ( m_port != -1 )
 	{
-		iec61883Connection::CheckConsistency( m_port, m_node );
+		// Skip CheckConsistency (iec61883_cmp_normalize_output) — it
+		// attempts to reset the device's oPCR which can fail and disrupt
+		// the bus when IRM is unavailable.  The subsequent CMP connect
+		// or ForceConnection handles connection setup.
 
 		if ( ! m_noavc )
 		{
 			m_avc = new AVC( m_port );
 			if ( ! m_avc )
 				throw std::string( "failed to initialize AV/C" );
-			if ( m_interactive )
+			if ( m_interactive || m_waitRecordStart )
 				m_avc->Pause( m_node );
 			if ( m_avc->isHDV( m_node ) )
 			{
@@ -551,6 +558,52 @@ void DVgrab::waitForRecordStart()
 
 void DVgrab::startCapture()
 {
+	// On re-arm (not the first capture), stop the old capture thread
+	// and restart the reader BEFORE creating the new writer.  This
+	// ensures the reader's format probe detects any format change
+	// (e.g. DV ↔ DVCPRO HD) and prevents the old capture thread
+	// from writing frames to the new writer prematurely.
+	if ( m_avc && m_hasCaptured && ( m_waitRecordStart || m_interactive ) )
+	{
+		if ( m_waitRecordStart )
+		{
+			// Ensure the camera has fully left record state.
+			// done() detected a non-record status, but the camera
+			// may bounce back momentarily.  Wait until it settles
+			// into a non-record state so waitForRecordStart doesn't
+			// immediately re-trigger on a lingering record status.
+			sendEvent( "Waiting for recording to stop..." );
+			while ( !g_done )
+			{
+				quadlet_t status = m_avc->TransportStatus( m_node );
+				quadlet_t resp2 = AVC1394_MASK_RESPONSE_OPERAND( status, 2 );
+				quadlet_t resp3 = AVC1394_MASK_RESPONSE_OPERAND( status, 3 );
+				if ( resp2 != AVC1394_VCR_RESPONSE_TRANSPORT_STATE_RECORD ||
+				     resp3 == AVC1394_VCR_OPERAND_RECORD_PAUSE )
+					break;
+				timespec t = {0, 125000000L};
+				nanosleep( &t, NULL );
+			}
+
+			waitForRecordStart();
+		}
+
+		// Tell the capture thread to exit its loop before
+		// stopping the reader.  StopThread's TriggerAction
+		// signal can be missed if the capture thread isn't
+		// blocked in WaitForAction at that instant.  Setting
+		// m_reader_active = false ensures the capture thread
+		// will break out of its while loop regardless.
+		m_reader_active = false;
+		m_reader->StopThread();
+		pthread_join( capture_thread, NULL );
+		delete m_reader;
+		m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
+			this->testCaptureProxy, this, m_hdv );
+		pthread_create( &capture_thread, NULL, captureThread, this );
+		m_reader->StartThread();
+	}
+
 	if ( m_dst_file_name )
 	{
 		pthread_mutex_lock( &capture_mutex );
@@ -647,47 +700,79 @@ void DVgrab::startCapture()
 		}
 
 		if ( m_waitRecordStart )
-			waitForRecordStart();
+		{
+			// First capture: wait for recording to begin.
+			// Re-arm was already handled at the top of startCapture.
+			if ( !m_hasCaptured )
+			{
+				waitForRecordStart();
+				m_hasCaptured = true;
+			}
+		}
 		else
 		{
 			// Now Play so we can capture something
 			if ( !g_done )
+			{
 				m_avc->Play( m_node );
+				// Give the device time to start, then check status
+				timespec t = {0, 250000000L};
+				nanosleep( &t, NULL );
+				quadlet_t status = m_avc->TransportStatus( m_node );
+				sendEvent( "AVC transport status: 0x%08x", status );
+			}
 		}
 	}
 
 	sendEvent( "Waiting for %s...", m_hdv ? "HDV" : "DV" );
 
-	// this is a little unclean, checking global g_done from main.cc to allow interruption
-	while ( !g_done && m_frame == NULL )
+	if ( m_interactive )
 	{
-		timespec t = {0, 25000000L};
-		nanosleep( &t, NULL );
-	}
-
-	if ( !g_done && m_frame )
-	{
-		// OK, we have data, commence capture
-		sendEvent( "Capture Started" );
+		// In interactive mode, don't block waiting for data.  The user
+		// may need to start the transport manually or the device may
+		// take time to begin streaming.  Arm the capture and return
+		// to the interactive loop — frames will be written by the
+		// capture thread as they arrive.
 		m_captureActive = true;
+		m_hasCaptured = true;
 		m_total_frames = 0;
-
-		// parse the SMIL time value duration
-		if ( m_timeDuration == NULL && ! m_duration.empty() )
-			m_timeDuration = new SMIL::MediaClippingTime( m_duration, m_frame->GetFrameRate() );
 
 		if ( m_dst_file_name )
 			pthread_mutex_unlock( &capture_mutex );
 	}
 	else
 	{
-		// No data received, throw an error
-		if ( m_dst_file_name )
-			pthread_mutex_unlock( &capture_mutex );
-		const char *err = m_hdv ? "no HDV. Try again before giving up." : "no DV";
-		if ( m_hdv )
-			reset_bus( m_port );
-		throw std::string( err );
+		// this is a little unclean, checking global g_done from main.cc to allow interruption
+		while ( !g_done && m_frame == NULL )
+		{
+			timespec t = {0, 25000000L};
+			nanosleep( &t, NULL );
+		}
+
+		if ( !g_done && m_frame )
+		{
+			// OK, we have data, commence capture
+			sendEvent( "Capture Started" );
+			m_captureActive = true;
+			m_total_frames = 0;
+
+			// parse the SMIL time value duration
+			if ( m_timeDuration == NULL && ! m_duration.empty() )
+				m_timeDuration = new SMIL::MediaClippingTime( m_duration, m_frame->GetFrameRate() );
+
+			if ( m_dst_file_name )
+				pthread_mutex_unlock( &capture_mutex );
+		}
+		else
+		{
+			// No data received, throw an error
+			if ( m_dst_file_name )
+				pthread_mutex_unlock( &capture_mutex );
+			const char *err = m_hdv ? "no HDV. Try again before giving up." : "no DV";
+			if ( m_hdv )
+				reset_bus( m_port );
+			throw std::string( err );
+		}
 	}
 }
 
@@ -914,6 +999,11 @@ void DVgrab::writeFrame()
 			m_lockPending = false;
 		}
 
+		// Use .mxf extension for DVCPRO HD recordings
+		if ( ! m_writer->FileIsOpen() &&
+		     m_frame->GetDataLen() >= DVCPROHD_NTSC_FRAME_SIZE )
+			m_writer->SetExtension( ".mxf" );
+
 		if ( ! m_writer->WriteFrame( m_frame ) )
 		{
 			pthread_mutex_unlock( &capture_mutex );
@@ -1071,7 +1161,8 @@ void DVgrab::captureThreadRun()
 		}
 		else
 		{
-			if ( m_hdv )
+			if ( m_hdv ||
+			     m_frame->GetDataLen() >= DVCPROHD_NTSC_FRAME_SIZE )
 			{
 				writeFrame();
 			}

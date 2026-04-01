@@ -160,10 +160,9 @@ int discoverAVC( int* port, octlet_t* guid )
 				         rom_dir.model_id == DVMCDA1_MODEL_ID ) )
 				{
 					rom1394_free_directory( &rom_dir );
-					octlet_t my_guid, *pguid = ( *guid == 1 )? guid : &my_guid;
-					*pguid = rom1394_get_guid( handle, i );
+					*guid = rom1394_get_guid( handle, i );
 					fprintf( stderr, "Found AV/C device with GUID 0x%08x%08x\n",
-						(quadlet_t) (*pguid>>32), (quadlet_t) (*pguid & 0xffffffff));
+						(quadlet_t) (*guid>>32), (quadlet_t) (*guid & 0xffffffff));
 					device = i;
 					*port = j;
 					break;

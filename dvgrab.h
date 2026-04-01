@@ -116,6 +116,7 @@ private:
 
 	static FileHandler *m_writer;
 	bool m_captureActive;
+	bool m_hasCaptured;
 
 	static pthread_mutex_t capture_mutex;
 	static pthread_t capture_thread;

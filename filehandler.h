@@ -96,6 +96,7 @@ public:
 	virtual void SetTimeSys( bool );
 	virtual void SetTimeCode( bool );
 	virtual void SetBaseName( const string& base );
+	virtual void SetExtension( const string& ext );
 	virtual void SetMaxFrameCount( int );
 	virtual void SetEveryNthFrame( int );
 	virtual void SetMaxFileSize( off_t );

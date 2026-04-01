@@ -130,9 +130,20 @@ private:
 	BusResetHandler m_resetHandler;
 	const void* m_resetHandlerData;
 
+	/// Raw iso receive mode (bypasses libiec61883 DV frame buffer)
+	bool m_rawIsoMode;
+	raw1394handle_t m_rawIsoHandle;
+	unsigned char *m_rawIsoFrameBuf;
+	int m_rawIsoBufCapacity;
+	int m_rawIsoFrameSize;
+	int m_rawIsoFrameOffset;
+	int m_rawIsoAlignOffset;
+	int m_rawIsoFixApt;
+	bool m_rawIsoSynced;
+
 public:
 
-	iec61883Reader( int port = 0, int channel = 63, int buffers = 50, 
+	iec61883Reader( int port = 0, int channel = 63, int buffers = 50,
 		BusResetHandler = 0, BusResetHandlerData = 0, bool hdv = false );
 	~iec61883Reader();
 
@@ -148,10 +159,14 @@ public:
 
 private:
 	static int ResetHandlerProxy( raw1394handle_t handle, unsigned int generation );
-	static int Mpeg2HandlerProxy( unsigned char *data, int length, unsigned int dropped, 
+	static int Mpeg2HandlerProxy( unsigned char *data, int length, unsigned int dropped,
 		void *callback_data );
-	static int DvHandlerProxy( unsigned char *data, int length, int complete, 
+	static int DvHandlerProxy( unsigned char *data, int length, int complete,
 		void *callback_data );
+	static enum raw1394_iso_disposition RawDvIsoHandler( raw1394handle_t handle,
+		unsigned char *data, unsigned int len, unsigned char channel,
+		unsigned char tag, unsigned char sy, unsigned int cycle,
+		unsigned int dropped );
 	static void* ThreadProxy( void *arg );
 };
 
@@ -165,6 +180,11 @@ private:
 	int m_bandwidth;
 	int m_outputPort;
 	int m_inputPort;
+	bool m_cmpConnected;
+	bool m_forcedoPCR;
+	quadlet_t m_originaloPCR;
+
+	int ForceConnection( void );
 
 public:
 

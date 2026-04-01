@@ -259,6 +259,11 @@ void FileHandler::SetBaseName( const string& s )
 	base = s;
 }
 
+void FileHandler::SetExtension( const string& ext )
+{
+	extension = ext;
+}
+
 
 void FileHandler::SetMaxFrameCount( int count )
 {
