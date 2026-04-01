@@ -1,6 +1,6 @@
 dnl Process this file with autoconf to produce a configure script.
 AC_PREREQ(2.69)
-AC_INIT(dvgrab, 3.6.4)
+AC_INIT(dvgrab, 3.7.0)
 AM_INIT_AUTOMAKE
 AM_CONFIG_HEADER(config.h)
 AM_MAINTAINER_MODE
