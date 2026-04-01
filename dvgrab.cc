@@ -671,13 +671,25 @@ void DVgrab::startCapture()
 				if ( m_dst_file_name )
 					pthread_mutex_unlock( &capture_mutex );
 
-				waitForRecordStart();
+				// First, ensure the camera has fully left record state.
+				// done() detected a non-record status, but the camera
+				// may bounce back momentarily.  Wait until it settles
+				// into a non-record state so waitForRecordStart doesn't
+				// immediately re-trigger on a lingering record status.
+				sendEvent( "Waiting for recording to stop..." );
+				while ( !g_done )
+				{
+					quadlet_t status = m_avc->TransportStatus( m_node );
+					quadlet_t resp2 = AVC1394_MASK_RESPONSE_OPERAND( status, 2 );
+					quadlet_t resp3 = AVC1394_MASK_RESPONSE_OPERAND( status, 3 );
+					if ( resp2 != AVC1394_VCR_RESPONSE_TRANSPORT_STATE_RECORD ||
+					     resp3 == AVC1394_VCR_OPERAND_RECORD_PAUSE )
+						break;
+					timespec t = {0, 125000000L};
+					nanosleep( &t, NULL );
+				}
 
-				// Wait for the isochronous stream to stabilize in the
-				// new format before re-probing.  The camera may still
-				// be transitioning its output after AVC status changes.
-				timespec delay = {3, 0};
-				nanosleep( &delay, NULL );
+				waitForRecordStart();
 
 				// Tell the capture thread to exit its loop before
 				// stopping the reader.  StopThread's TriggerAction
