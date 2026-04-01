@@ -494,8 +494,10 @@ rawIsoHandler( raw1394handle_t handle, unsigned char *data,
 	unsigned char sy, unsigned int cycle, unsigned int dropped )
 {
 	int *counter = static_cast< int* >( raw1394_get_userdata( handle ) );
-	( *counter )++;
-	if ( *counter == 1 )
+	// Only count packets with actual payload (not empty CIP headers)
+	if ( len > 8 )
+		( *counter )++;
+	if ( *counter == 1 && len > 8 )
 	{
 		fprintf( stderr, "  Raw iso packet: channel=%d len=%u tag=%d "
 			"cycle=%u\n", channel, len, tag, cycle );
@@ -929,7 +931,7 @@ bool iec61883Reader::StartReceive()
 				{
 					CipProbeData *cd = static_cast< CipProbeData* >(
 						raw1394_get_userdata( h ) );
-					if ( (int)l > cd->maxLen )
+					if ( l > 8 && (int)l > cd->maxLen )
 						cd->maxLen = l;
 					if ( tg == 1 && l >= 8 && cd->fn < 0 )
 					{
