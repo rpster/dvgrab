@@ -75,7 +75,7 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 		m_guid( 0 ), m_timesys( false ), m_connection( 0 ), m_raw_pipe( false ),
 		m_no_stop( false ), m_timecode( false ), m_lockstep( false ), m_lockPending( false ),
 		m_lockstep_maxdrops( DEFAULT_LOCKSTEP_MAXDROPS ), m_lockstep_totaldrops( DEFAULT_LOCKSTEP_TOTALDROPS ),
-		m_captureActive( false ), m_avc( 0 ), m_reader( 0 ), m_hdv( false ), m_showstatus( false ),
+		m_captureActive( false ), m_hasCaptured( false ), m_avc( 0 ), m_reader( 0 ), m_hdv( false ), m_showstatus( false ),
 		m_isLastTimeCodeSet( false ), m_isLastRecDateSet( false ), m_v4l2( false ), m_jvc_p25( false ),
 		m_isRecordMode( false ), m_waitRecordStart( false ), m_isRewindFirst( false ),
 		m_timeSplit(0), m_srt( false ), m_isNewFile(false)
@@ -661,7 +661,7 @@ void DVgrab::startCapture()
 			// On the first capture, the reader was already created in
 			// the constructor and its probe may have already detected
 			// the correct format from idle streaming data.
-			if ( m_total_frames > 0 )
+			if ( m_hasCaptured )
 			{
 				waitForRecordStart();
 
@@ -682,6 +682,7 @@ void DVgrab::startCapture()
 			else
 			{
 				waitForRecordStart();
+				m_hasCaptured = true;
 			}
 		}
 		else
