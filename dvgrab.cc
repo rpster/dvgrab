@@ -181,6 +181,13 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 			m_buffers, frameSize / 1024, totalMB );
 
 		pthread_create( &capture_thread, NULL, captureThread, this );
+
+		// When -record-start is used, the camera may not be streaming
+		// yet.  Wait for it to start recording before starting the
+		// reader thread, so the isochronous probe detects DVCPRO HD.
+		if ( m_waitRecordStart && m_avc )
+			waitForRecordStart();
+
 		m_reader->StartThread();
 	}
 }
@@ -651,7 +658,12 @@ void DVgrab::startCapture()
 		}
 
 		if ( m_waitRecordStart )
-			waitForRecordStart();
+		{
+			// waitForRecordStart() is called before the reader
+			// starts (constructor) and between re-arm cycles
+			// (main.cc), so we just need to verify the device
+			// is still recording.
+		}
 		else
 		{
 			// Now Play so we can capture something
