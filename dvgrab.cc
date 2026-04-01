@@ -656,6 +656,18 @@ void DVgrab::startCapture()
 		if ( m_waitRecordStart )
 		{
 			waitForRecordStart();
+
+			// Restart the reader so its probe can detect the actual
+			// stream format (DV25 vs DVCPRO50 vs DVCPRO HD).  The
+			// initial reader was created before recording started,
+			// so its probe found no data and defaulted to DV25 mode.
+			m_reader->StopThread();
+			pthread_join( capture_thread, NULL );
+			delete m_reader;
+			m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
+				this->testCaptureProxy, this, m_hdv );
+			pthread_create( &capture_thread, NULL, captureThread, this );
+			m_reader->StartThread();
 		}
 		else
 		{
