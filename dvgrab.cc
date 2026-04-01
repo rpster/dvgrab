@@ -651,7 +651,17 @@ void DVgrab::startCapture()
 		}
 
 		if ( m_waitRecordStart )
+		{
 			waitForRecordStart();
+			// Restart reader to re-probe with the correct stream
+			// format.  The initial probe ran in the constructor
+			// before the device was recording, so it may have
+			// detected DV25 preview or no data at all.
+			m_reader->StopThread();
+			pthread_join( capture_thread, NULL );
+			pthread_create( &capture_thread, NULL, captureThread, this );
+			m_reader->StartThread();
+		}
 		else
 		{
 			// Now Play so we can capture something
