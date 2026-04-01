@@ -139,7 +139,7 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 			m_avc = new AVC( m_port );
 			if ( ! m_avc )
 				throw std::string( "failed to initialize AV/C" );
-			if ( m_interactive )
+			if ( m_interactive || m_waitRecordStart )
 				m_avc->Pause( m_node );
 			if ( m_avc->isHDV( m_node ) )
 			{
