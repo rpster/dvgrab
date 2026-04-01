@@ -670,6 +670,12 @@ void DVgrab::startCapture()
 
 				waitForRecordStart();
 
+				// Wait for the isochronous stream to stabilize in the
+				// new format before re-probing.  The camera may still
+				// be transitioning its output after AVC status changes.
+				timespec delay = {3, 0};
+				nanosleep( &delay, NULL );
+
 				m_reader->StopThread();
 				pthread_join( capture_thread, NULL );
 				delete m_reader;
