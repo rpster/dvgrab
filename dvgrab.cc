@@ -719,7 +719,8 @@ void DVgrab::startCapture()
 				timespec t = {0, 250000000L};
 				nanosleep( &t, NULL );
 				quadlet_t status = m_avc->TransportStatus( m_node );
-				sendEvent( "AVC transport status: 0x%08x", status );
+				if ( d_all )
+					sendEvent( "AVC transport status: 0x%08x", status );
 			}
 		}
 	}
@@ -751,6 +752,16 @@ void DVgrab::startCapture()
 
 		if ( !g_done && m_frame )
 		{
+			// Drain any drops that accumulated while the reader was
+			// streaming before capture began (e.g. during
+			// waitForRecordStart).  The capture thread is blocked on
+			// capture_mutex in writeFrame(), so these counters are
+			// stable until we unlock.
+			m_reader->GetDroppedFrames();
+			m_reader->GetBadFrames();
+			m_dropped_frames = 0;
+			m_bad_frames = 0;
+
 			// OK, we have data, commence capture
 			sendEvent( "Capture Started" );
 			m_captureActive = true;

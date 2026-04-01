@@ -497,7 +497,7 @@ rawIsoHandler( raw1394handle_t handle, unsigned char *data,
 	// Only count packets with actual payload (not empty CIP headers)
 	if ( len > 8 )
 		( *counter )++;
-	if ( *counter == 1 && len > 8 )
+	if ( d_all && *counter == 1 && len > 8 )
 	{
 		fprintf( stderr, "  Raw iso packet: channel=%d len=%u tag=%d "
 			"cycle=%u\n", channel, len, tag, cycle );
@@ -531,7 +531,7 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 
 	static int rawCallCount = 0;
 	rawCallCount++;
-	if ( rawCallCount == 1 )
+	if ( d_all && rawCallCount == 1 )
 		fprintf( stderr, "RawDvIsoHandler: receiving data, len=%u "
 			"channel=%d\n", len, channel );
 
@@ -639,10 +639,11 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 		if ( alignOff >= 0 )
 		{
 			self->m_rawIsoAlignOffset = alignOff;
-			fprintf( stderr, "DIF frame alignment: offset=%d "
-				"bytes (%d DIF blocks), frame_size=%d\n",
-				alignOff, alignOff / 80,
-				self->m_rawIsoFrameSize );
+			if ( d_all )
+				fprintf( stderr, "DIF frame alignment: offset=%d "
+					"bytes (%d DIF blocks), frame_size=%d\n",
+					alignOff, alignOff / 80,
+					self->m_rawIsoFrameSize );
 			int remaining = self->m_rawIsoFrameOffset - alignOff;
 			if ( remaining > 0 )
 				memmove( self->m_rawIsoFrameBuf,
@@ -652,8 +653,9 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 		else
 		{
 			self->m_rawIsoAlignOffset = 0;
-			fprintf( stderr, "DIF frame alignment: no headers "
-				"found, using unaligned\n" );
+			if ( d_all )
+				fprintf( stderr, "DIF frame alignment: no headers "
+					"found, using unaligned\n" );
 		}
 	}
 
@@ -664,69 +666,72 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 		if ( !self->m_rawIsoSynced )
 		{
 			self->m_rawIsoSynced = true;
-			fprintf( stderr, "=== First frame DIF structure "
-				"(frame_size=%d) ===\n",
-				self->m_rawIsoFrameSize );
-			int seqNum = 0;
-			for ( int off = 0; off + 80 <= self->m_rawIsoFrameSize;
-				off += 80 )
+			if ( d_all )
 			{
-				int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
-				if ( sct == 0 )
+				fprintf( stderr, "=== First frame DIF structure "
+					"(frame_size=%d) ===\n",
+					self->m_rawIsoFrameSize );
+				int seqNum = 0;
+				for ( int off = 0; off + 80 <= self->m_rawIsoFrameSize;
+					off += 80 )
 				{
-					int dsn = ( self->m_rawIsoFrameBuf[off + 1] >> 4 ) & 0x0F;
-					int fsc = ( self->m_rawIsoFrameBuf[off + 1] >> 3 ) & 1;
-					int apt = self->m_rawIsoFrameBuf[off + 4] & 0x07;
-					int tf1a = ( self->m_rawIsoFrameBuf[off + 4] >> 5 ) & 1;
-					fprintf( stderr, "  Seq %2d @ offset %6d: "
-						"SCT=0 DSN=%d FSC=%d APT=%d TF1a=%d "
-						"bytes[0..7]: %02x %02x %02x %02x %02x "
-						"%02x %02x %02x\n",
-						seqNum, off, dsn, fsc, apt, tf1a,
-						self->m_rawIsoFrameBuf[off],
-						self->m_rawIsoFrameBuf[off+1],
-						self->m_rawIsoFrameBuf[off+2],
-						self->m_rawIsoFrameBuf[off+3],
-						self->m_rawIsoFrameBuf[off+4],
-						self->m_rawIsoFrameBuf[off+5],
-						self->m_rawIsoFrameBuf[off+6],
-						self->m_rawIsoFrameBuf[off+7] );
-					seqNum++;
-				}
-			}
-			fprintf( stderr, "=== Total DIF sequences: %d ===\n",
-				seqNum );
-
-			// Dump VAUX packs from first DIF sequence to
-			// identify video format (VS=0x60, VSC=0x61).
-			// VAUX blocks are at offsets 240, 320, 400
-			// (after 1 header + 2 subcode blocks).
-			fprintf( stderr, "=== VAUX packs (first "
-				"sequence) ===\n" );
-			for ( int vb = 0; vb < 3; vb++ )
-			{
-				int voff = ( 3 + vb ) * 80 + 3;
-				if ( voff + 77 > self->m_rawIsoFrameSize )
-					break;
-				// Each VAUX block has 15 packs × 5 bytes
-				for ( int p = 0; p < 15; p++ )
-				{
-					int poff = voff + p * 5;
-					unsigned char hdr =
-						self->m_rawIsoFrameBuf[poff];
-					if ( hdr == 0x60 || hdr == 0x61 )
+					int sct = ( self->m_rawIsoFrameBuf[off] >> 5 ) & 7;
+					if ( sct == 0 )
 					{
-						fprintf( stderr,
-							"  Pack 0x%02x @ %d:"
-							" %02x %02x %02x %02x"
-							" %02x\n",
-							hdr, poff,
-							self->m_rawIsoFrameBuf[poff],
-							self->m_rawIsoFrameBuf[poff+1],
-							self->m_rawIsoFrameBuf[poff+2],
-							self->m_rawIsoFrameBuf[poff+3],
-							self->m_rawIsoFrameBuf[poff+4]
-						);
+						int dsn = ( self->m_rawIsoFrameBuf[off + 1] >> 4 ) & 0x0F;
+						int fsc = ( self->m_rawIsoFrameBuf[off + 1] >> 3 ) & 1;
+						int apt = self->m_rawIsoFrameBuf[off + 4] & 0x07;
+						int tf1a = ( self->m_rawIsoFrameBuf[off + 4] >> 5 ) & 1;
+						fprintf( stderr, "  Seq %2d @ offset %6d: "
+							"SCT=0 DSN=%d FSC=%d APT=%d TF1a=%d "
+							"bytes[0..7]: %02x %02x %02x %02x %02x "
+							"%02x %02x %02x\n",
+							seqNum, off, dsn, fsc, apt, tf1a,
+							self->m_rawIsoFrameBuf[off],
+							self->m_rawIsoFrameBuf[off+1],
+							self->m_rawIsoFrameBuf[off+2],
+							self->m_rawIsoFrameBuf[off+3],
+							self->m_rawIsoFrameBuf[off+4],
+							self->m_rawIsoFrameBuf[off+5],
+							self->m_rawIsoFrameBuf[off+6],
+							self->m_rawIsoFrameBuf[off+7] );
+						seqNum++;
+					}
+				}
+				fprintf( stderr, "=== Total DIF sequences: %d ===\n",
+					seqNum );
+
+				// Dump VAUX packs from first DIF sequence to
+				// identify video format (VS=0x60, VSC=0x61).
+				// VAUX blocks are at offsets 240, 320, 400
+				// (after 1 header + 2 subcode blocks).
+				fprintf( stderr, "=== VAUX packs (first "
+					"sequence) ===\n" );
+				for ( int vb = 0; vb < 3; vb++ )
+				{
+					int voff = ( 3 + vb ) * 80 + 3;
+					if ( voff + 77 > self->m_rawIsoFrameSize )
+						break;
+					// Each VAUX block has 15 packs × 5 bytes
+					for ( int p = 0; p < 15; p++ )
+					{
+						int poff = voff + p * 5;
+						unsigned char hdr =
+							self->m_rawIsoFrameBuf[poff];
+						if ( hdr == 0x60 || hdr == 0x61 )
+						{
+							fprintf( stderr,
+								"  Pack 0x%02x @ %d:"
+								" %02x %02x %02x %02x"
+								" %02x\n",
+								hdr, poff,
+								self->m_rawIsoFrameBuf[poff],
+								self->m_rawIsoFrameBuf[poff+1],
+								self->m_rawIsoFrameBuf[poff+2],
+								self->m_rawIsoFrameBuf[poff+3],
+								self->m_rawIsoFrameBuf[poff+4]
+							);
+						}
 					}
 				}
 			}
@@ -865,8 +870,9 @@ bool iec61883Reader::StartReceive()
 	// detect stream parameters.  Retry if no packets found (the
 	// device may need time to start isochronous output after
 	// entering record mode).
-	fprintf( stderr, "Probing for isochronous data on channel %d...\n",
-		channel );
+	if ( d_all )
+		fprintf( stderr, "Probing for isochronous data on channel %d...\n",
+			channel );
 	int probeFn = -1;
 	int probeDbs = -1;
 	int probeFdf = -1;
@@ -876,8 +882,9 @@ bool iec61883Reader::StartReceive()
 	{
 		if ( attempt > 0 )
 		{
-			fprintf( stderr, "  Retrying probe (attempt %d)...\n",
-				attempt + 1 );
+			if ( d_all )
+				fprintf( stderr, "  Retrying probe (attempt %d)...\n",
+					attempt + 1 );
 			timespec t = {0, 500000000L};
 			nanosleep( &t, NULL );
 		}
@@ -904,8 +911,9 @@ bool iec61883Reader::StartReceive()
 					raw1394_iso_stop( probe );
 					raw1394_iso_shutdown( probe );
 					probePackets = counter;
-					fprintf( stderr, "  Probe: %d packets in 500ms\n",
-						counter );
+					if ( d_all )
+						fprintf( stderr, "  Probe: %d packets in 500ms\n",
+							counter );
 				}
 			}
 			raw1394_destroy_handle( probe );
@@ -970,15 +978,17 @@ bool iec61883Reader::StartReceive()
 				probeDbs = cipData.dbs;
 				probeFdf = cipData.fdf;
 				probeMaxLen = cipData.maxLen;
-				fprintf( stderr, "  CIP: DBS=%d FN=%d FDF=0x%02x "
-					"max_pkt=%d\n", probeDbs, probeFn, probeFdf,
-					probeMaxLen );
+				if ( d_all )
+					fprintf( stderr, "  CIP: DBS=%d FN=%d FDF=0x%02x "
+						"max_pkt=%d\n", probeDbs, probeFn, probeFdf,
+						probeMaxLen );
 			}
 		}
 	}
 
 	/* Starting iso receive */
-	fprintf( stderr, "Starting isochronous receive on channel %d\n", channel );
+	if ( d_all )
+		fprintf( stderr, "Starting isochronous receive on channel %d\n", channel );
 
 	// Use raw iso mode for DVCPRO50+ (FN>0 means packets larger than
 	// DV25, which libiec61883 may not handle correctly)
@@ -988,9 +998,10 @@ bool iec61883Reader::StartReceive()
 		//   FN=1: DVCPRO50 (50 Mbps) - 960 byte packets
 		//   FN=2: DVCPRO HD (100 Mbps) - 1920 byte packets
 		const char *fmtName = probeFn >= 2 ? "DVCPRO-HD" : "DVCPRO50";
-		fprintf( stderr, "Using raw iso receive mode for %s "
-			"(FN=%d, %d-byte packets)\n", fmtName, probeFn,
-			probeMaxLen );
+		if ( d_all )
+			fprintf( stderr, "Using raw iso receive mode for %s "
+				"(FN=%d, %d-byte packets)\n", fmtName, probeFn,
+				probeMaxLen );
 
 		// Determine frame size from FN and FDF 50/60 flag.
 		bool pal = ( probeFdf & 0x80 ) != 0;
@@ -1036,8 +1047,9 @@ bool iec61883Reader::StartReceive()
 					-1, -1, 0 ) == 0 )
 				{
 					success = true;
-					fprintf( stderr, "Raw iso receive started "
-						"(frame_size=%d)\n", m_rawIsoFrameSize );
+					if ( d_all )
+						fprintf( stderr, "Raw iso receive started "
+							"(frame_size=%d)\n", m_rawIsoFrameSize );
 				}
 				else
 				{
@@ -1070,7 +1082,8 @@ bool iec61883Reader::StartReceive()
 			else
 				fail_neg( iec61883_dv_fb_start( m_iec61883_dv, channel ) );
 			success = true;
-			fprintf( stderr, "Isochronous receive started successfully\n" );
+			if ( d_all )
+				fprintf( stderr, "Isochronous receive started successfully\n" );
 		}
 		catch ( string exc )
 		{
@@ -1117,7 +1130,7 @@ int iec61883Reader::DvHandlerProxy( unsigned char *data, int length,
 int iec61883Reader::Handler( unsigned char *data, int length, int dropped )
 {
 	static int handlerCalls = 0;
-	if ( handlerCalls == 0 )
+	if ( d_all && handlerCalls == 0 )
 		fprintf( stderr, "First DV packet received: %d bytes\n", length );
 	handlerCalls++;
 
@@ -1257,8 +1270,9 @@ iec61883Connection::iec61883Connection( int port, int node ) :
 			// CMP returned a channel but failed to allocate bandwidth
 			// (IRM unavailable).  The oPCR may not have been modified.
 			// Force a known-good connection.
-			fprintf( stderr, "CMP returned channel %d but no bandwidth "
-				"allocated, forcing oPCR\n", m_channel );
+			if ( d_all )
+				fprintf( stderr, "CMP returned channel %d but no bandwidth "
+					"allocated, forcing oPCR\n", m_channel );
 			m_channel = ForceConnection();
 		}
 		else
@@ -1308,8 +1322,9 @@ int iec61883Connection::ForceConnection( void )
 		numPlugs = mprVal & 0x1F;
 		int rateCap = ( mprVal >> 30 ) & 0x3;
 		bcastBase = ( mprVal >> 24 ) & 0x3F;
-		fprintf( stderr, "oMPR = 0x%08x (rate_cap=%d, bcast_base=%d, "
-			"num_plugs=%d)\n", mprVal, rateCap, bcastBase, numPlugs );
+		if ( d_all )
+			fprintf( stderr, "oMPR = 0x%08x (rate_cap=%d, bcast_base=%d, "
+				"num_plugs=%d)\n", mprVal, rateCap, bcastBase, numPlugs );
 	}
 
 	// Read all output Plug Control Registers
@@ -1332,9 +1347,10 @@ int iec61883Connection::ForceConnection( void )
 		int oPCRchan  = ( value >> 10 ) & 0x3F;
 		int dataRate  = ( value >> 8 )  & 0x3;
 
-		fprintf( stderr, "oPCR[%d] = 0x%08x (online=%d, bcast=%d, p2p=%d, "
-			"channel=%d, rate=%d)\n", plug, value,
-			online, bcastConn, p2pCount, oPCRchan, dataRate );
+		if ( d_all )
+			fprintf( stderr, "oPCR[%d] = 0x%08x (online=%d, bcast=%d, p2p=%d, "
+				"channel=%d, rate=%d)\n", plug, value,
+				online, bcastConn, p2pCount, oPCRchan, dataRate );
 
 		if ( plug == 0 )
 			m_originaloPCR = oPCR;
@@ -1351,8 +1367,9 @@ int iec61883Connection::ForceConnection( void )
 		}
 	}
 
-	fprintf( stderr, "Using %s channel %d\n",
-		foundActive ? "broadcast" : "fallback", bestChannel );
+	if ( d_all )
+		fprintf( stderr, "Using %s channel %d\n",
+			foundActive ? "broadcast" : "fallback", bestChannel );
 
 	return bestChannel;
 }
