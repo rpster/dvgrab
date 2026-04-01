@@ -887,7 +887,7 @@ int JPEGHandler::fixAspect( Frame *frame )
 	int width = frame->GetWidth( );
 	int height = frame->GetHeight( );
 	static JSAMPLE image[ 2048 * 2048 * 3 ];
-	register JSAMPLE *dest = image_buffer, *src = image;
+	JSAMPLE *dest = image_buffer, *src = image;
 	int new_width = dvframe->IsPAL() ? 337 : 320;
 	int n = width / 2 - new_width;
 	int d = width / 2;
@@ -895,10 +895,10 @@ int JPEGHandler::fixAspect( Frame *frame )
 
 	memcpy( src, dest, width * height * 3 );
 
-	for ( register int j = 0; j < height; j += 2 )
+	for ( int j = 0; j < height; j += 2 )
 	{
 		src = image + j * ( width * 3 );
-		for ( register int i = 0; i < new_width ; i++ )
+		for ( int i = 0; i < new_width ; i++ )
 		{
 			if ( a > d )
 			{
@@ -922,14 +922,14 @@ bool JPEGHandler::scale( Frame *frame )
 	int width = frame->GetWidth( );
 	int height = frame->GetHeight( );
 	static JSAMPLE image[ 2048 * 2048 * 3 ];
-	register JSAMPLE *dest = image_buffer, *src = image;
+	JSAMPLE *dest = image_buffer, *src = image;
 	AffineTransform affine;
 	double scale_x = ( double ) new_width / ( double ) width;
 	double scale_y = ( double ) new_height / ( double ) height;
 
 	memcpy( src, dest, width * height * 3 );
 
-	register int i, j, x, y;
+	int i, j, x, y;
 	if ( scale_x <= 1.0 && scale_y <= 1.0 )
 	{
 		affine.Scale( scale_x, scale_y );
