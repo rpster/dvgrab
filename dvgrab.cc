@@ -150,22 +150,14 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 		
 		if ( m_guid )
 		{
-			// Always create the connection — the CMP bus activity
-			// primes the device to start isochronous output when it
-			// enters record mode.  But defer the reader creation when
-			// -record-start is active so the probe sees live data and
-			// selects the correct receive mode (raw ISO for DVCPRO HD).
 			m_connection = new iec61883Connection( m_port, m_node );
 			if ( ! m_connection )
 				throw std::string( "failed to establish isochronous connection" );
 			m_channel = m_connection->GetChannel();
 			sendEvent( "Established connection over channel %d", m_channel );
 		}
-		if ( ! m_waitRecordStart )
-		{
-			m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
-				this->testCaptureProxy, this, m_hdv );
-		}
+		m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
+			this->testCaptureProxy, this, m_hdv );
 	}
 	else if ( m_v4l2 )
 	{
@@ -661,25 +653,6 @@ void DVgrab::startCapture()
 		if ( m_waitRecordStart )
 		{
 			waitForRecordStart();
-
-			// Give the camera time to start isochronous output
-			// after entering record mode.
-			sendEvent( "Waiting for isochronous stream to start..." );
-			timespec t = {3, 0};
-			nanosleep( &t, NULL );
-
-			// Create the reader now that the camera is recording.
-			// The connection was already created in the constructor
-			// (CMP bus activity primes the device for output).
-			int frameSize = m_hdv ? DATA_BUFFER_LEN : DV_FRAME_BUFFER_LEN;
-			int totalMB = ( (long long) m_buffers * frameSize ) / ( 1024 * 1024 );
-			sendEvent( "Allocating %d frame buffers (%d KB each, ~%d MB total)",
-				m_buffers, frameSize / 1024, totalMB );
-
-			m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
-				this->testCaptureProxy, this, m_hdv );
-			pthread_create( &capture_thread, NULL, captureThread, this );
-			m_reader->StartThread();
 		}
 		else
 		{
