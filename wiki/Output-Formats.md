@@ -1,6 +1,6 @@
 # Output Formats
 
-dvgrab supports several output formats, selected with `-format TYPE` or inferred from the base filename extension.
+dvgrab supports several output formats, selected with `-format TYPE` or inferred from the base filename extension. dvgrab also auto-detects DVCPRO format variants (DVCPRO50 and DVCPRO HD) from the DV stream's APT (Application Profile Type) field.
 
 ## Format Comparison
 
@@ -59,6 +59,26 @@ Square pixel sizes for scaling:
 ### MPEG-2 Transport Stream (`mpeg2` / `hdv`)
 
 For HDV camcorders and digital TV settop boxes. Stores the MPEG-2 Transport Stream data with a `.m2t` extension. See [Advanced Features](Advanced-Features) for HDV-specific options.
+
+## DVCPRO Formats
+
+dvgrab auto-detects DVCPRO format variants from the DIF stream header. No special command-line option is needed -- the format is determined by the APT (Application Profile Type) field in the incoming data.
+
+### DV25 (APT=0)
+
+Standard DV, DVCAM, and basic DVCPRO at 25 Mbps. This is the default DV format with frame sizes of 120,000 bytes (NTSC) or 144,000 bytes (PAL). Handled identically to regular DV capture.
+
+### DVCPRO50 (APT=1)
+
+Professional 50 Mbps format with doubled DIF sequences, producing frame sizes of 240,000 bytes (NTSC) or 288,000 bytes (PAL). DVCPRO50 is received via raw isochronous mode with 960-byte packets. Output uses the same container format as standard DV (raw, AVI, etc.).
+
+### DVCPRO HD (APT=4)
+
+Professional 100 Mbps format for 1080i/1080p/720p content, with frame sizes of 480,000 bytes (NTSC) or 576,000 bytes (PAL). DVCPRO HD is received via raw isochronous mode with 1920-byte packets and uses 4-channel DIF interleaving.
+
+When capturing DVCPRO HD, dvgrab automatically switches the file extension to `.mxf` for the raw output format. All other output formats (AVI, QuickTime) use their standard extensions.
+
+**Note:** libdv cannot decode DVCPRO HD frames, so the JPEG output format is not available for DVCPRO HD input. dvgrab uses custom DIF header parsing for metadata extraction from DVCPRO HD streams.
 
 ## Auto-Detection from Filename
 
