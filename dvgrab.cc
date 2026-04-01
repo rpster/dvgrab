@@ -663,11 +663,6 @@ void DVgrab::startCapture()
 			// the correct format from idle streaming data.
 			if ( m_total_frames > 0 )
 			{
-				// Re-arm: send AVC Pause to re-prime the camera for
-				// isochronous output after a mode change, then wait.
-				if ( m_avc )
-					m_avc->Pause( m_node );
-
 				waitForRecordStart();
 
 				// Wait for the isochronous stream to stabilize in the
