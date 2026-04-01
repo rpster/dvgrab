@@ -560,29 +560,33 @@ void DVgrab::startCapture()
 {
 	// On re-arm (not the first capture), stop the old capture thread
 	// and restart the reader BEFORE creating the new writer.  This
-	// must happen first so the old capture thread doesn't write frames
-	// to the new writer while we're waiting for the next recording.
-	if ( m_avc && m_waitRecordStart && m_hasCaptured )
+	// ensures the reader's format probe detects any format change
+	// (e.g. DV ↔ DVCPRO HD) and prevents the old capture thread
+	// from writing frames to the new writer prematurely.
+	if ( m_avc && m_hasCaptured && ( m_waitRecordStart || m_interactive ) )
 	{
-		// Ensure the camera has fully left record state.
-		// done() detected a non-record status, but the camera
-		// may bounce back momentarily.  Wait until it settles
-		// into a non-record state so waitForRecordStart doesn't
-		// immediately re-trigger on a lingering record status.
-		sendEvent( "Waiting for recording to stop..." );
-		while ( !g_done )
+		if ( m_waitRecordStart )
 		{
-			quadlet_t status = m_avc->TransportStatus( m_node );
-			quadlet_t resp2 = AVC1394_MASK_RESPONSE_OPERAND( status, 2 );
-			quadlet_t resp3 = AVC1394_MASK_RESPONSE_OPERAND( status, 3 );
-			if ( resp2 != AVC1394_VCR_RESPONSE_TRANSPORT_STATE_RECORD ||
-			     resp3 == AVC1394_VCR_OPERAND_RECORD_PAUSE )
-				break;
-			timespec t = {0, 125000000L};
-			nanosleep( &t, NULL );
-		}
+			// Ensure the camera has fully left record state.
+			// done() detected a non-record status, but the camera
+			// may bounce back momentarily.  Wait until it settles
+			// into a non-record state so waitForRecordStart doesn't
+			// immediately re-trigger on a lingering record status.
+			sendEvent( "Waiting for recording to stop..." );
+			while ( !g_done )
+			{
+				quadlet_t status = m_avc->TransportStatus( m_node );
+				quadlet_t resp2 = AVC1394_MASK_RESPONSE_OPERAND( status, 2 );
+				quadlet_t resp3 = AVC1394_MASK_RESPONSE_OPERAND( status, 3 );
+				if ( resp2 != AVC1394_VCR_RESPONSE_TRANSPORT_STATE_RECORD ||
+				     resp3 == AVC1394_VCR_OPERAND_RECORD_PAUSE )
+					break;
+				timespec t = {0, 125000000L};
+				nanosleep( &t, NULL );
+			}
 
-		waitForRecordStart();
+			waitForRecordStart();
+		}
 
 		// Tell the capture thread to exit its loop before
 		// stopping the reader.  StopThread's TriggerAction
@@ -730,6 +734,7 @@ void DVgrab::startCapture()
 		// to the interactive loop — frames will be written by the
 		// capture thread as they arrive.
 		m_captureActive = true;
+		m_hasCaptured = true;
 		m_total_frames = 0;
 
 		if ( m_dst_file_name )
