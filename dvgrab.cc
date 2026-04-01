@@ -101,9 +101,12 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 		m_buffers = MAX_BUFFERS;
 	}
 
-	// -record-start implies -recordonly
+	// -record-start implies -recordonly and -showstatus
 	if ( m_waitRecordStart )
+	{
 		m_isRecordMode = true;
+		m_showstatus = true;
+	}
 
 	if ( m_v4l2 )
 	{
