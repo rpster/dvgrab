@@ -1024,7 +1024,9 @@ bool iec61883Reader::StartReceive()
 		else
 		{
 			raw1394_set_userdata( m_rawIsoHandle, this );
-			int maxPkt = probeMaxLen > 0 ? probeMaxLen : 2048;
+			// Use 2048 as minimum — the probe may only see empty CIP
+			// headers (8 bytes) if the device just started streaming.
+			int maxPkt = probeMaxLen > 2048 ? probeMaxLen : 2048;
 			if ( raw1394_iso_recv_init( m_rawIsoHandle, RawDvIsoHandler,
 				400, maxPkt, channel, RAW1394_DMA_DEFAULT, -1 ) == 0 )
 			{
