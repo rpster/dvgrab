@@ -82,6 +82,7 @@ DVgrab::DVgrab( int argc, char *argv[] ) :
 {
 	m_frame = 0;
 	m_writer = 0;
+	m_transportStatus = 0;
 	m_input_file_name = NULL;
 	m_dst_file_name = NULL;
 
@@ -1102,7 +1103,8 @@ void DVgrab::captureThreadRun()
 		}
 		else
 		{
-			if ( m_hdv )
+			if ( m_hdv ||
+			     m_frame->GetDataLen() >= DVCPROHD_NTSC_FRAME_SIZE )
 			{
 				writeFrame();
 			}
