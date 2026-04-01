@@ -37,14 +37,6 @@ Debug types: `all`, `pat`, `pmt`, `pids`, `pid=N`, `pes`, `packet`, `video`, `so
 
 dvgrab supports DVCPRO50 (50 Mbps) and DVCPRO HD (100 Mbps) formats in addition to standard DV25. Format detection is fully automatic -- dvgrab reads the APT (Application Profile Type) field from the DIF stream header and adjusts frame sizes and reception mode accordingly.
 
-```bash
-# Capture from a DVCPRO50 or DVCPRO HD deck -- no special flags needed
-dvgrab -autosplit myfilm-
-
-# DVCPRO HD with AVI Type 2 output
-dvgrab -format dv2 -autosplit myfilm-
-```
-
 ### How Detection Works
 
 DVCPRO50 and DVCPRO HD devices transmit via raw isochronous mode rather than the standard AV/C isochronous mode used by DV25 devices. dvgrab detects the format from the FN (Format Number) field in the isochronous packets:
