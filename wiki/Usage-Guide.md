@@ -154,4 +154,10 @@ dvgrab -v4l2 -input /dev/video1
 
 # HDV capture, split on 8-hour gaps, with subtitles
 dvgrab -format=hdv -autosplit=28800 -srt foo-
+
+# DVCPRO50 or DVCPRO HD capture (auto-detected)
+dvgrab -autosplit myfilm-
+
+# DVCPRO HD to AVI Type 2
+dvgrab -format dv2 -autosplit myfilm-
 ```

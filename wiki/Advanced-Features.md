@@ -33,6 +33,40 @@ dvgrab -debug all -format hdv myfilm-
 
 Debug types: `all`, `pat`, `pmt`, `pids`, `pid=N`, `pes`, `packet`, `video`, `sonya1`
 
+## DVCPRO Capture
+
+dvgrab supports DVCPRO50 (50 Mbps) and DVCPRO HD (100 Mbps) formats in addition to standard DV25. Format detection is fully automatic -- dvgrab reads the APT (Application Profile Type) field from the DIF stream header and adjusts frame sizes and reception mode accordingly.
+
+```bash
+# Capture from a DVCPRO50 or DVCPRO HD deck -- no special flags needed
+dvgrab -autosplit myfilm-
+
+# DVCPRO HD with AVI Type 2 output
+dvgrab -format dv2 -autosplit myfilm-
+```
+
+### How Detection Works
+
+DVCPRO50 and DVCPRO HD devices transmit via raw isochronous mode rather than the standard AV/C isochronous mode used by DV25 devices. dvgrab detects the format from the FN (Format Number) field in the isochronous packets:
+
+| FN | Format | Bit Rate | Packet Size | Frame Size (NTSC / PAL) |
+|----|--------|----------|-------------|-------------------------|
+| 0  | DV25   | 25 Mbps  | 480 bytes   | 120,000 / 144,000 |
+| 1  | DVCPRO50 | 50 Mbps | 960 bytes  | 240,000 / 288,000 |
+| 2  | DVCPRO HD | 100 Mbps | 1,920 bytes | 480,000 / 576,000 |
+
+### DVCPRO HD Specifics
+
+DVCPRO HD uses 4-channel DIF interleaving. Frame alignment is performed by detecting DIF Sequence Number (DSN) transitions (DSN=9 to DSN=0) at channel boundaries.
+
+For 720p content, the 4 channels are split into two logical frames (Frame A from channels 0+1, Frame B from channels 2+3), with channel identity determined by the FSC and FSP bits.
+
+DVCPRO HD recordings automatically use a `.mxf` file extension when the raw output format is selected. The AVI `dvsd` FOURCC codec handler is used for AVI container output.
+
+**Limitations:**
+- libdv cannot parse DVCPRO HD frames, so JPEG output is unavailable
+- Metadata extraction uses custom DIF header parsing rather than libdv
+
 ## USB UVC Device Capture
 
 dvgrab supports USB Video Class (UVC) DV devices via the `uvcvideo` kernel module (V4L2).

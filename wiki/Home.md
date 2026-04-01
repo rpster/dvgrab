@@ -1,12 +1,12 @@
 # dvgrab
 
-**dvgrab** is a command-line utility for capturing DV and HDV (MPEG2-TS) video and audio data from digital camcorders via FireWire (IEEE 1394). It also supports USB Video Class (UVC) devices and can read raw DV/HDV streams from pipes.
+**dvgrab** is a command-line utility for capturing DV, DVCPRO50, DVCPRO HD, and HDV (MPEG2-TS) video and audio data from digital camcorders via FireWire (IEEE 1394). It also supports USB Video Class (UVC) devices and can read raw DV/HDV streams from pipes.
 
 ## Features
 
-- Capture DV and HDV video from FireWire camcorders
+- Capture DV, DVCPRO50, DVCPRO HD, and HDV video from FireWire camcorders
 - USB UVC device support via V4L2
-- Multiple output formats: raw DV, AVI (Type 1 & 2), QuickTime, JPEG sequences, MPEG2-TS
+- Multiple output formats: raw DV, AVI (Type 1 & 2), QuickTime, JPEG sequences, MPEG2-TS, MXF (DVCPRO HD)
 - Interactive mode for camcorder VTR control (play, pause, rewind, fast-forward)
 - Automatic file splitting by size, frame count, duration, or new recordings
 - Collection-based splitting for DVD archival

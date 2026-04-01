@@ -107,6 +107,24 @@ If dvgrab cannot find your camera:
 4. For multiple devices, use `-guid` to select by GUID
 5. Ensure the camera is powered on and in VTR or camera mode
 
+## DVCPRO Notes
+
+### DVCPRO50 / DVCPRO HD Not Detected
+
+DVCPRO50 and DVCPRO HD devices use raw isochronous mode rather than standard AV/C isochronous. If your DVCPRO device is not detected:
+
+1. Ensure the device is powered on and connected via FireWire before starting dvgrab
+2. Try specifying the device with `-guid` if auto-detection fails
+3. DVCPRO format is detected automatically from the stream -- no `-format` flag is needed
+
+### JPEG Output Not Available with DVCPRO HD
+
+The JPEG output format requires libdv for frame decoding, and libdv does not support DVCPRO HD frames. Use raw, AVI, or QuickTime output formats instead.
+
+### DVCPRO HD Files Use .mxf Extension
+
+DVCPRO HD recordings automatically use a `.mxf` file extension instead of `.dv` when the raw output format is selected. This is expected behavior for proper container identification.
+
 ## Known Fixes in Recent Versions
 
 ### Year 2025 Date Bug
