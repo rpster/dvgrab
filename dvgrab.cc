@@ -752,6 +752,16 @@ void DVgrab::startCapture()
 
 		if ( !g_done && m_frame )
 		{
+			// Drain any drops that accumulated while the reader was
+			// streaming before capture began (e.g. during
+			// waitForRecordStart).  The capture thread is blocked on
+			// capture_mutex in writeFrame(), so these counters are
+			// stable until we unlock.
+			m_reader->GetDroppedFrames();
+			m_reader->GetBadFrames();
+			m_dropped_frames = 0;
+			m_bad_frames = 0;
+
 			// OK, we have data, commence capture
 			sendEvent( "Capture Started" );
 			m_captureActive = true;
