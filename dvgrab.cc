@@ -655,19 +655,33 @@ void DVgrab::startCapture()
 
 		if ( m_waitRecordStart )
 		{
-			waitForRecordStart();
+			// On re-arm (not the first capture), restart the reader
+			// so its probe can detect a format change (e.g. the user
+			// switched from DV to DVCPRO HD between recordings).
+			// On the first capture, the reader was already created in
+			// the constructor and its probe may have already detected
+			// the correct format from idle streaming data.
+			if ( m_total_frames > 0 )
+			{
+				// Re-arm: send AVC Pause to re-prime the camera for
+				// isochronous output after a mode change, then wait.
+				if ( m_avc )
+					m_avc->Pause( m_node );
 
-			// Restart the reader so its probe can detect the actual
-			// stream format (DV25 vs DVCPRO50 vs DVCPRO HD).  The
-			// initial reader was created before recording started,
-			// so its probe found no data and defaulted to DV25 mode.
-			m_reader->StopThread();
-			pthread_join( capture_thread, NULL );
-			delete m_reader;
-			m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
-				this->testCaptureProxy, this, m_hdv );
-			pthread_create( &capture_thread, NULL, captureThread, this );
-			m_reader->StartThread();
+				waitForRecordStart();
+
+				m_reader->StopThread();
+				pthread_join( capture_thread, NULL );
+				delete m_reader;
+				m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
+					this->testCaptureProxy, this, m_hdv );
+				pthread_create( &capture_thread, NULL, captureThread, this );
+				m_reader->StartThread();
+			}
+			else
+			{
+				waitForRecordStart();
+			}
 		}
 		else
 		{
