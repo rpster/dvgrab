@@ -653,12 +653,27 @@ void DVgrab::startCapture()
 		if ( m_waitRecordStart )
 		{
 			waitForRecordStart();
-			// Restart reader to re-probe with the correct stream
-			// format.  The initial probe ran in the constructor
-			// before the device was recording, so it may have
-			// detected DV25 preview or no data at all.
+
+			// Re-establish the isochronous connection.  The device
+			// may have reset its output plug when entering record
+			// mode, stopping isochronous output on the old channel.
+			if ( m_connection )
+			{
+				delete m_connection;
+				m_connection = new iec61883Connection( m_port, m_node );
+				int newChannel = m_connection->GetChannel();
+				if ( newChannel >= 0 )
+					m_channel = newChannel;
+				sendEvent( "Re-established connection over channel %d",
+					m_channel );
+			}
+
+			// Restart reader to probe the now-active stream.
 			m_reader->StopThread();
 			pthread_join( capture_thread, NULL );
+			delete m_reader;
+			m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
+				this->testCaptureProxy, this, m_hdv );
 			pthread_create( &capture_thread, NULL, captureThread, this );
 			m_reader->StartThread();
 		}
