@@ -663,6 +663,14 @@ void DVgrab::startCapture()
 			// the correct format from idle streaming data.
 			if ( m_hasCaptured )
 			{
+				// Unlock the mutex before blocking on waitForRecordStart
+				// and the reader restart.  The capture thread calls
+				// writeFrame() which needs this mutex, so holding it
+				// here while waiting for the capture thread to finish
+				// would cause a deadlock.
+				if ( m_dst_file_name )
+					pthread_mutex_unlock( &capture_mutex );
+
 				waitForRecordStart();
 
 				// Wait for the isochronous stream to stabilize in the
@@ -671,6 +679,13 @@ void DVgrab::startCapture()
 				timespec delay = {3, 0};
 				nanosleep( &delay, NULL );
 
+				// Tell the capture thread to exit its loop before
+				// stopping the reader.  StopThread's TriggerAction
+				// signal can be missed if the capture thread isn't
+				// blocked in WaitForAction at that instant.  Setting
+				// m_reader_active = false ensures the capture thread
+				// will break out of its while loop regardless.
+				m_reader_active = false;
 				m_reader->StopThread();
 				pthread_join( capture_thread, NULL );
 				delete m_reader;
@@ -678,6 +693,11 @@ void DVgrab::startCapture()
 					this->testCaptureProxy, this, m_hdv );
 				pthread_create( &capture_thread, NULL, captureThread, this );
 				m_reader->StartThread();
+
+				// Re-lock the mutex so the writer setup below and the
+				// eventual unlock later in this function are balanced.
+				if ( m_dst_file_name )
+					pthread_mutex_lock( &capture_mutex );
 			}
 			else
 			{
