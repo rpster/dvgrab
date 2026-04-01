@@ -655,6 +655,12 @@ void DVgrab::startCapture()
 
 		if ( m_waitRecordStart )
 		{
+			// Send AVC Pause to prime the camera for isochronous
+			// output.  This is needed each time — the camera may have
+			// changed modes between recordings.
+			if ( m_avc )
+				m_avc->Pause( m_node );
+
 			waitForRecordStart();
 
 			// Restart the reader so its probe can detect the actual
