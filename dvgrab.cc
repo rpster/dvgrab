@@ -719,7 +719,8 @@ void DVgrab::startCapture()
 				timespec t = {0, 250000000L};
 				nanosleep( &t, NULL );
 				quadlet_t status = m_avc->TransportStatus( m_node );
-				sendEvent( "AVC transport status: 0x%08x", status );
+				if ( d_all )
+					sendEvent( "AVC transport status: 0x%08x", status );
 			}
 		}
 	}
