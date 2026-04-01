@@ -147,8 +147,8 @@ int main( int argc, char *argv[] )
 					dvgrab.stopCapture();
 					if ( !dvgrab.isWaitRecordStart() )
 						break;
-					// Re-arm: wait for the device to record again
-					dvgrab.waitForRecordStart();
+					// Re-arm: startCapture handles waitForRecordStart
+					// and reader restart for format detection.
 					if ( !g_done )
 						dvgrab.startCapture();
 				}

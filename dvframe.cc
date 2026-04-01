@@ -179,26 +179,32 @@ bool DVFrame::IsHDV()
 bool DVFrame::GetSSYBPack( int packNum, Pack &pack )
 {
 #ifdef WITH_LIBDV
-	pack.data[ 0 ] = packNum;
+	// libdv cannot parse DVCPRO HD frames — fall through to
+	// manual DIF parsing for frames larger than DV25.
+	if ( GetDataLen() < DVCPROHD_NTSC_FRAME_SIZE )
+	{
+		pack.data[ 0 ] = packNum;
 #ifdef HAVE_LIBDV_1_0
 
-	dv_get_vaux_pack( decoder, packNum, &pack.data[ 1 ] );
+		dv_get_vaux_pack( decoder, packNum, &pack.data[ 1 ] );
 #else
 
-	int id;
-	if ( ( id = decoder->ssyb_pack[ packNum ] ) != 0xff )
-	{
-		pack.data[ 1 ] = decoder->ssyb_data[ id ][ 0 ];
-		pack.data[ 2 ] = decoder->ssyb_data[ id ][ 1 ];
-		pack.data[ 3 ] = decoder->ssyb_data[ id ][ 2 ];
-		pack.data[ 4 ] = decoder->ssyb_data[ id ][ 3 ];
+		int id;
+		if ( ( id = decoder->ssyb_pack[ packNum ] ) != 0xff )
+		{
+			pack.data[ 1 ] = decoder->ssyb_data[ id ][ 0 ];
+			pack.data[ 2 ] = decoder->ssyb_data[ id ][ 1 ];
+			pack.data[ 3 ] = decoder->ssyb_data[ id ][ 2 ];
+			pack.data[ 4 ] = decoder->ssyb_data[ id ][ 3 ];
+		}
+#endif
+		return true;
 	}
 #endif
-	return true;
 
-#else
-
-	/* number of DIF sequences is different for PAL and NTSC */
+	/* number of DIF sequences — for DVCPRO HD only search the first
+	   DIF track (10 or 12 sequences) since timecode is replicated
+	   across all tracks. */
 
 	int seqCount = IsPAL() ? 12 : 10;
 
@@ -223,11 +229,8 @@ bool DVFrame::GetSSYBPack( int packNum, Pack &pack )
 				(including header) */
 
 				const unsigned char *s = &data[ i * 150 * 80 + 1 * 80 + j * 80 + 3 + k * 8 + 3 ];
-				// printf("ssyb %d: %2.2x %2.2x %2.2x %2.2x %2.2x\n",
-				// j * 6 + k, s[0], s[1], s[2], s[3], s[4]);
 				if ( s[ 0 ] == packNum )
 				{
-					//					printf("GetSSYBPack[%x]: sequence %d, block %d, packet %d\n", packNum,i,j,k);
 					pack.data[ 0 ] = s[ 0 ];
 					pack.data[ 1 ] = s[ 1 ];
 					pack.data[ 2 ] = s[ 2 ];
@@ -239,7 +242,6 @@ bool DVFrame::GetSSYBPack( int packNum, Pack &pack )
 		}
 	}
 	return false;
-#endif
 }
 
 
@@ -412,15 +414,20 @@ done = true:
 bool DVFrame::GetRecordingDate( struct tm &recDate )
 {
 #ifdef HAVE_LIBDV
-	if ( !dv_get_recording_datetime_tm( decoder, ( struct tm * ) &recDate ) )
-		return false;
-	// libdv may return the raw 2-digit year in tm_year instead of
-	// years-since-1900.  Apply the same century correction as the
-	// non-libdv path: values below 95 are 2000s (need +100 offset).
-	if ( recDate.tm_year < 95 )
-		recDate.tm_year += 100;
-	return true;
-#else
+	// libdv cannot parse DVCPRO HD frames
+	if ( GetDataLen() < DVCPROHD_NTSC_FRAME_SIZE )
+	{
+		if ( !dv_get_recording_datetime_tm( decoder, ( struct tm * ) &recDate ) )
+			return false;
+		// libdv may return the raw 2-digit year in tm_year instead of
+		// years-since-1900.  Apply the same century correction as the
+		// non-libdv path: values below 95 are 2000s (need +100 offset).
+		if ( recDate.tm_year < 95 )
+			recDate.tm_year += 100;
+		return true;
+	}
+#endif
+	{
 
 	Pack pack62;
 	Pack pack63;
@@ -466,7 +473,7 @@ bool DVFrame::GetRecordingDate( struct tm &recDate )
 	if ( mktime( &recDate ) == -1 )
 		return false;
 	return true;
-#endif
+	}
 }
 
 
@@ -482,22 +489,26 @@ bool DVFrame::GetRecordingDate( struct tm &recDate )
 bool DVFrame::GetTimeCode( TimeCode &timeCode )
 {
 #ifdef HAVE_LIBDV
-	int timestamp[ 4 ];
+	// libdv cannot parse DVCPRO HD frames
+	if ( GetDataLen() < DVCPROHD_NTSC_FRAME_SIZE )
+	{
+		int timestamp[ 4 ];
 
-	if ( dv_get_timestamp_int( decoder, timestamp ) ) {
-		timeCode.hour = timestamp[ 0 ];
-		timeCode.min = timestamp[ 1 ];
-		timeCode.sec = timestamp[ 2 ];
-		timeCode.frame = timestamp[ 3 ];
-		return true;
-	} else {
-		timeCode.hour = 0;
-		timeCode.min = 0;
-		timeCode.sec = 0;
-		timeCode.frame = 0;
-		return false;
+		if ( dv_get_timestamp_int( decoder, timestamp ) ) {
+			timeCode.hour = timestamp[ 0 ];
+			timeCode.min = timestamp[ 1 ];
+			timeCode.sec = timestamp[ 2 ];
+			timeCode.frame = timestamp[ 3 ];
+			return true;
+		} else {
+			timeCode.hour = 0;
+			timeCode.min = 0;
+			timeCode.sec = 0;
+			timeCode.frame = 0;
+			return false;
+		}
 	}
-#else
+#endif
 
 	Pack tc;
 
@@ -514,7 +525,6 @@ bool DVFrame::GetTimeCode( TimeCode &timeCode )
 	timeCode.min = ( min & 0xf ) + 10 * ( ( min >> 4 ) & 0x7 );
 	timeCode.hour = ( hour & 0xf ) + 10 * ( ( hour >> 4 ) & 0x3 );
 	return true;
-#endif
 }
 
 
