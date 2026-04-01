@@ -558,6 +558,48 @@ void DVgrab::waitForRecordStart()
 
 void DVgrab::startCapture()
 {
+	// On re-arm (not the first capture), stop the old capture thread
+	// and restart the reader BEFORE creating the new writer.  This
+	// must happen first so the old capture thread doesn't write frames
+	// to the new writer while we're waiting for the next recording.
+	if ( m_avc && m_waitRecordStart && m_hasCaptured )
+	{
+		// Ensure the camera has fully left record state.
+		// done() detected a non-record status, but the camera
+		// may bounce back momentarily.  Wait until it settles
+		// into a non-record state so waitForRecordStart doesn't
+		// immediately re-trigger on a lingering record status.
+		sendEvent( "Waiting for recording to stop..." );
+		while ( !g_done )
+		{
+			quadlet_t status = m_avc->TransportStatus( m_node );
+			quadlet_t resp2 = AVC1394_MASK_RESPONSE_OPERAND( status, 2 );
+			quadlet_t resp3 = AVC1394_MASK_RESPONSE_OPERAND( status, 3 );
+			if ( resp2 != AVC1394_VCR_RESPONSE_TRANSPORT_STATE_RECORD ||
+			     resp3 == AVC1394_VCR_OPERAND_RECORD_PAUSE )
+				break;
+			timespec t = {0, 125000000L};
+			nanosleep( &t, NULL );
+		}
+
+		waitForRecordStart();
+
+		// Tell the capture thread to exit its loop before
+		// stopping the reader.  StopThread's TriggerAction
+		// signal can be missed if the capture thread isn't
+		// blocked in WaitForAction at that instant.  Setting
+		// m_reader_active = false ensures the capture thread
+		// will break out of its while loop regardless.
+		m_reader_active = false;
+		m_reader->StopThread();
+		pthread_join( capture_thread, NULL );
+		delete m_reader;
+		m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
+			this->testCaptureProxy, this, m_hdv );
+		pthread_create( &capture_thread, NULL, captureThread, this );
+		m_reader->StartThread();
+	}
+
 	if ( m_dst_file_name )
 	{
 		pthread_mutex_lock( &capture_mutex );
@@ -655,63 +697,9 @@ void DVgrab::startCapture()
 
 		if ( m_waitRecordStart )
 		{
-			// On re-arm (not the first capture), restart the reader
-			// so its probe can detect a format change (e.g. the user
-			// switched from DV to DVCPRO HD between recordings).
-			// On the first capture, the reader was already created in
-			// the constructor and its probe may have already detected
-			// the correct format from idle streaming data.
-			if ( m_hasCaptured )
-			{
-				// Unlock the mutex before blocking on waitForRecordStart
-				// and the reader restart.  The capture thread calls
-				// writeFrame() which needs this mutex, so holding it
-				// here while waiting for the capture thread to finish
-				// would cause a deadlock.
-				if ( m_dst_file_name )
-					pthread_mutex_unlock( &capture_mutex );
-
-				// First, ensure the camera has fully left record state.
-				// done() detected a non-record status, but the camera
-				// may bounce back momentarily.  Wait until it settles
-				// into a non-record state so waitForRecordStart doesn't
-				// immediately re-trigger on a lingering record status.
-				sendEvent( "Waiting for recording to stop..." );
-				while ( !g_done )
-				{
-					quadlet_t status = m_avc->TransportStatus( m_node );
-					quadlet_t resp2 = AVC1394_MASK_RESPONSE_OPERAND( status, 2 );
-					quadlet_t resp3 = AVC1394_MASK_RESPONSE_OPERAND( status, 3 );
-					if ( resp2 != AVC1394_VCR_RESPONSE_TRANSPORT_STATE_RECORD ||
-					     resp3 == AVC1394_VCR_OPERAND_RECORD_PAUSE )
-						break;
-					timespec t = {0, 125000000L};
-					nanosleep( &t, NULL );
-				}
-
-				waitForRecordStart();
-
-				// Tell the capture thread to exit its loop before
-				// stopping the reader.  StopThread's TriggerAction
-				// signal can be missed if the capture thread isn't
-				// blocked in WaitForAction at that instant.  Setting
-				// m_reader_active = false ensures the capture thread
-				// will break out of its while loop regardless.
-				m_reader_active = false;
-				m_reader->StopThread();
-				pthread_join( capture_thread, NULL );
-				delete m_reader;
-				m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
-					this->testCaptureProxy, this, m_hdv );
-				pthread_create( &capture_thread, NULL, captureThread, this );
-				m_reader->StartThread();
-
-				// Re-lock the mutex so the writer setup below and the
-				// eventual unlock later in this function are balanced.
-				if ( m_dst_file_name )
-					pthread_mutex_lock( &capture_mutex );
-			}
-			else
+			// First capture: wait for recording to begin.
+			// Re-arm was already handled at the top of startCapture.
+			if ( !m_hasCaptured )
 			{
 				waitForRecordStart();
 				m_hasCaptured = true;
