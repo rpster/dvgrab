@@ -76,7 +76,7 @@ TimeCode;
 #define DV_FRAME_BUFFER_LEN DVCPROHD_PAL_FRAME_SIZE
 
 // Maximum allowed value for -buffers flag
-#define MAX_BUFFERS 500
+#define MAX_BUFFERS 2000
 
 class Frame
 {

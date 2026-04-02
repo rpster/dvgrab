@@ -46,7 +46,7 @@
 #define DEFAULT_CMINCUTSIZE 0
 #define DEFAULT_EVERY 1
 #define DEFAULT_CHANNEL 63
-#define DEFAULT_BUFFERS 100
+#define DEFAULT_BUFFERS 500
 #define DEFAULT_V4L2_DEVICE "/dev/video"
 
 extern int g_debug;
