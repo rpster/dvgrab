@@ -41,6 +41,8 @@ using std::endl;
 #include <fcntl.h>
 #include <unistd.h>
 #include <assert.h>
+#include <errno.h>
+#include <string.h>
 
 // local includes
 
@@ -580,13 +582,23 @@ void RIFFFile::ReadChunk( int chunk_index, void *data )
 void RIFFFile::WriteChunk( int chunk_index, const void *data )
 {
 	RIFFDirEntry entry;
+	ssize_t r;
 
 	entry = GetDirectoryEntry( chunk_index );
 	fail_if( lseek( fd, entry.offset - RIFF_HEADERSIZE, SEEK_SET ) == ( off_t ) - 1 );
-	fail_neg( write( fd, &entry.type, sizeof( entry.type ) ) );
+	if ( ( r = write( fd, &entry.type, sizeof( entry.type ) ) ) < 0 )
+		sendEvent( "WriteChunk: write failed (chunk type at offset %lld): %s",
+		           (long long)( entry.offset - RIFF_HEADERSIZE ), strerror( errno ) );
+	fail_neg( r );
 	DWORD length = entry.length;
-	fail_neg( write( fd, &length, sizeof( length ) ) );
-	fail_neg( write( fd, data, entry.length ) );
+	if ( ( r = write( fd, &length, sizeof( length ) ) ) < 0 )
+		sendEvent( "WriteChunk: write failed (chunk length at offset %lld): %s",
+		           (long long)( entry.offset - RIFF_HEADERSIZE + (off_t)sizeof( entry.type ) ), strerror( errno ) );
+	fail_neg( r );
+	if ( ( r = write( fd, data, entry.length ) ) < 0 )
+		sendEvent( "WriteChunk: write failed (chunk data %lld bytes at offset %lld): %s",
+		           (long long)entry.length, (long long)entry.offset, strerror( errno ) );
+	fail_neg( r );
 
 	/* Remember that this entry already has been written. */
 
@@ -629,16 +641,26 @@ void RIFFFile::WriteRIFF( void )
 			   items. */
 
 			fail_if( lseek( fd, entry.offset - RIFF_HEADERSIZE, SEEK_SET ) == ( off_t ) - 1 ) ;
-			fail_neg( write( fd, &entry.type, sizeof( entry.type ) ) );
+			ssize_t r;
+			if ( ( r = write( fd, &entry.type, sizeof( entry.type ) ) ) < 0 )
+				sendEvent( "WriteRIFF: write failed (entry type at offset %lld): %s",
+				           (long long)( entry.offset - RIFF_HEADERSIZE ), strerror( errno ) );
+			fail_neg( r );
 			DWORD length = entry.length;
-			fail_neg( write( fd, &length, sizeof( length ) ) );
+			if ( ( r = write( fd, &length, sizeof( length ) ) ) < 0 )
+				sendEvent( "WriteRIFF: write failed (entry length at offset %lld): %s",
+				           (long long)( entry.offset - RIFF_HEADERSIZE + (off_t)sizeof( entry.type ) ), strerror( errno ) );
+			fail_neg( r );
 
 			/* If it has a name, it is a list. Write out the extra name
 			   field. */
 
 			if ( entry.name != 0 )
 			{
-				fail_neg( write( fd, &entry.name, sizeof( entry.name ) ) );
+				if ( ( r = write( fd, &entry.name, sizeof( entry.name ) ) ) < 0 )
+					sendEvent( "WriteRIFF: write failed (entry name at offset %lld): %s",
+					           (long long)( entry.offset - RIFF_HEADERSIZE + 2 * (off_t)sizeof( entry.type ) ), strerror( errno ) );
+				fail_neg( r );
 			}
 
 			/* Remember that this entry already has been written. */

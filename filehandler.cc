@@ -472,7 +472,7 @@ bool FileHandler::WriteFrame( Frame *frame )
 
 		if ( ! Create( filename ) )
 		{
-			sendEvent( ">>> Error creating file!" );
+			sendEvent( ">>> Error creating file '%s': %s", filename.c_str(), strerror( errno ) );
 			return false;
 		}
 		isNewFile = true;
@@ -490,7 +490,8 @@ bool FileHandler::WriteFrame( Frame *frame )
 	{
 		if ( 0 > Write( frame ) )
 		{
-			sendEvent( ">>> Error writing frame!" );
+			sendEvent( ">>> Error writing frame to '%s': frame size=%d, file size=%lld: %s",
+			           filename.c_str(), frame->GetDataLen(), (long long)GetFileSize(), strerror( errno ) );
 			return false;
 		}
 		framesToSkip = everyNthFrame;
@@ -521,6 +522,9 @@ static ssize_t writen( int fd, unsigned char *vptr, size_t n )
 			}
 			else
 			{
+				int saved_errno = errno;
+				sendEvent( "write(%d) failed: %s (requested %zu bytes, wrote %zu before failure)",
+				           fd, strerror( saved_errno ), n, n - nleft );
 				return -1;
 			}
 		}
@@ -562,6 +566,10 @@ bool RawHandler::Create( const string& filename )
 		FileTracker::GetInstance().Add( filename.c_str() );
 		this->filename = filename;
 	}
+	else
+	{
+		sendEvent( "open('%s') failed: %s", filename.c_str(), strerror( errno ) );
+	}
 	return ( fd != -1 );
 }
 
@@ -569,6 +577,9 @@ bool RawHandler::Create( const string& filename )
 int RawHandler::Write( Frame *frame )
 {
 	int result = writen( fd, frame->data, frame->GetDataLen() );
+	if ( result < 0 )
+		sendEvent( "write failed for '%s': frame size=%d, file size=%lld",
+		           filename.c_str(), frame->GetDataLen(), (long long)GetFileSize() );
 	return result;
 }
 
@@ -1037,14 +1048,15 @@ int JPEGHandler::Write( Frame *frame )
 	}
 
 	FILE *outfile;
+	const char *outpath = this->usetemp ? this->temp.c_str() : file.c_str();
 
-	if ( this->usetemp ) {
-		outfile = fopen( const_cast<char*>( this->temp.c_str() ), "wb" );
-	} else {
-		outfile = fopen( const_cast<char*>( file.c_str() ), "wb" );
+	outfile = fopen( outpath, "wb" );
+	if ( outfile == NULL )
+	{
+		sendEvent( "failed to open '%s' for writing: %s", outpath, strerror( errno ) );
+		return -1;
 	}
-	if ( outfile != NULL )
-		jpeg_stdio_dest( &cinfo, outfile );
+	jpeg_stdio_dest( &cinfo, outfile );
 	cinfo.image_width = new_width;
 	cinfo.image_height = new_height;
 	row_stride = cinfo.image_width * cinfo.input_components;
@@ -1056,9 +1068,8 @@ int JPEGHandler::Write( Frame *frame )
 	}
 	jpeg_finish_compress( &cinfo );
 	fclose( outfile );
-	if ( this->usetemp ) {
-		rename(const_cast<char*>( this->temp.c_str() ), const_cast<char*>( file.c_str() ));
-	}
+	if ( this->usetemp )
+		rename( this->temp.c_str(), file.c_str() );
 	return 0;
 }
 
@@ -1110,6 +1121,10 @@ bool Mpeg2Handler::Create( const string& filename )
 	{
 		FileTracker::GetInstance().Add( filename.c_str() );
 		this->filename = filename;
+	}
+	else
+	{
+		sendEvent( "open('%s') failed: %s", filename.c_str(), strerror( errno ) );
 	}
 	return ( fd != -1 );
 }
@@ -1168,7 +1183,11 @@ int Mpeg2Handler::Write( Frame *frame )
 		else
 			result = writen( fd, buffer, bufferLen );
 		if ( 0 > result )
+		{
+			sendEvent( "write failed for '%s' (flushing %d buffered bytes): %s",
+			           filename.c_str(), bufferLen, strerror( errno ) );
 			return result;
+		}
 		bufferLen = 0;
 	}
 
@@ -1177,7 +1196,10 @@ int Mpeg2Handler::Write( Frame *frame )
 	else
 		result = writen( fd, frame->data, frame->GetDataLen() );
 
-	if ( 0 <= result )
+	if ( 0 > result )
+		sendEvent( "write failed for '%s': frame size=%d, file size=%lld: %s",
+		           filename.c_str(), frame->GetDataLen(), (long long)GetFileSize(), strerror( errno ) );
+	else
 		totalFrames++;
 
 	return result;
