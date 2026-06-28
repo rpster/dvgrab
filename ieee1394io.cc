@@ -488,39 +488,6 @@ void iec61883Reader::Close()
 	}
 }
 
-static enum raw1394_iso_disposition
-rawIsoHandler( raw1394handle_t handle, unsigned char *data,
-	unsigned int len, unsigned char channel, unsigned char tag,
-	unsigned char sy, unsigned int cycle, unsigned int dropped )
-{
-	int *counter = static_cast< int* >( raw1394_get_userdata( handle ) );
-	// Only count packets with actual payload (not empty CIP headers)
-	if ( len > 8 )
-		( *counter )++;
-	if ( d_all && *counter == 1 && len > 8 )
-	{
-		fprintf( stderr, "  Raw iso packet: channel=%d len=%u tag=%d "
-			"cycle=%u\n", channel, len, tag, cycle );
-		// Dump CIP header (first 8 bytes) if present
-		if ( len >= 8 && tag == 1 )
-		{
-			unsigned char fmt = data[4] & 0x3F;
-			unsigned char fdf = data[5];
-			int dbs = data[1];
-			int fn  = ( data[2] >> 6 ) & 0x3;
-			int sph = ( data[2] >> 2 ) & 1;
-			fprintf( stderr, "  CIP: DBS=%d FN=%d SPH=%d FMT=0x%02x "
-				"FDF=0x%02x\n", dbs, fn, sph, fmt, fdf );
-			// Dump first 16 bytes hex
-			fprintf( stderr, "  Hex:" );
-			for ( unsigned int b = 0; b < 16 && b < len; b++ )
-				fprintf( stderr, " %02x", data[b] );
-			fprintf( stderr, "\n" );
-		}
-	}
-	return RAW1394_ISO_OK;
-}
-
 enum raw1394_iso_disposition
 iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 	unsigned int len, unsigned char channel, unsigned char tag,
@@ -866,125 +833,148 @@ bool iec61883Reader::StartReceive()
 {
 	bool success;
 
-	// Probe: try raw iso receive to check for isochronous data and
-	// detect stream parameters.  Retry if no packets found (the
-	// device may need time to start isochronous output after
-	// entering record mode).
-	if ( d_all )
-		fprintf( stderr, "Probing for isochronous data on channel %d...\n",
-			channel );
+	// Probe for isochronous data and detect stream parameters.
+	//
+	// On the firewire-core (juju) backend the CMP channel negotiation
+	// often fails to reconfigure the camera, which then streams on its
+	// broadcast channel (typically 63) rather than the channel we
+	// negotiated.  Probing only the negotiated channel therefore sees no
+	// data at all (the classic "0 packets" / no-frames symptom for HDV).
+	//
+	// So probe the negotiated channel first, and if it is silent, sweep
+	// every channel and lock onto wherever isochronous data is actually
+	// arriving.  Retry the whole pass a few times since the device may
+	// need a moment to start isochronous output after being told to play.
+	struct ProbeData {
+		int fn, dbs, fdf, maxLen, count;
+	};
+	struct ChannelProbe {
+		static enum raw1394_iso_disposition handler(
+			raw1394handle_t h, unsigned char *d, unsigned int l,
+			unsigned char ch, unsigned char tg, unsigned char s,
+			unsigned int cy, unsigned int dr )
+		{
+			ProbeData *pd = static_cast< ProbeData* >(
+				raw1394_get_userdata( h ) );
+			// Only count packets with actual payload, not empty CIP headers.
+			if ( l > 8 )
+			{
+				pd->count++;
+				if ( (int)l > pd->maxLen )
+					pd->maxLen = l;
+				if ( tg == 1 && pd->fn < 0 )
+				{
+					pd->dbs = d[1];
+					pd->fn  = ( d[2] >> 6 ) & 0x3;
+					pd->fdf = d[5];
+				}
+			}
+			return RAW1394_ISO_OK;
+		}
+		// Probe a single channel for roughly durationMs; returns the
+		// number of payload-bearing packets seen and fills pd.
+		static int probe( int port, int ch, int durationMs, ProbeData *pd )
+		{
+			pd->fn = pd->dbs = pd->fdf = -1;
+			pd->maxLen = 0;
+			pd->count = 0;
+			raw1394handle_t h = raw1394_new_handle_on_port( port );
+			if ( !h )
+				return 0;
+			raw1394_set_userdata( h, pd );
+			if ( raw1394_iso_recv_init( h, handler, 64, 2048, ch,
+				RAW1394_DMA_DEFAULT, -1 ) == 0 )
+			{
+				if ( raw1394_iso_recv_start( h, -1, -1, 0 ) == 0 )
+				{
+					int fd = raw1394_get_fd( h );
+					struct pollfd pfd = { fd, POLLIN, 0 };
+					int iters = durationMs / 50;
+					if ( iters < 1 )
+						iters = 1;
+					for ( int t = 0; t < iters; t++ )
+					{
+						if ( poll( &pfd, 1, 50 ) > 0 )
+							raw1394_loop_iterate( h );
+					}
+					raw1394_iso_stop( h );
+					raw1394_iso_shutdown( h );
+				}
+			}
+			raw1394_destroy_handle( h );
+			return pd->count;
+		}
+	};
+
 	int probeFn = -1;
 	int probeDbs = -1;
 	int probeFdf = -1;
 	int probePackets = 0;
 	int probeMaxLen = 0;
-	for ( int attempt = 0; attempt < 5; attempt++ )
+
+	if ( d_all )
+		fprintf( stderr, "Probing for isochronous data (negotiated channel "
+			"%d)...\n", channel );
+
+	ProbeData pd;
+
+	// Phase 1: retry the negotiated channel a few times, since the device
+	// may need a moment to start isochronous output.
+	for ( int attempt = 0; attempt < 3 && probePackets == 0; attempt++ )
 	{
 		if ( attempt > 0 )
 		{
 			if ( d_all )
-				fprintf( stderr, "  Retrying probe (attempt %d)...\n",
-					attempt + 1 );
+				fprintf( stderr, "  Retrying negotiated channel (attempt "
+					"%d)...\n", attempt + 1 );
 			timespec t = {0, 500000000L};
 			nanosleep( &t, NULL );
 		}
-
-		raw1394handle_t probe = raw1394_new_handle_on_port( m_port );
-		if ( probe )
+		if ( ChannelProbe::probe( m_port, channel, 500, &pd ) > 0 )
 		{
-			int counter = 0;
-			raw1394_set_userdata( probe, &counter );
-
-			if ( raw1394_iso_recv_init( probe, rawIsoHandler, 64, 2048,
-				channel, RAW1394_DMA_DEFAULT, -1 ) == 0 )
-			{
-				if ( raw1394_iso_recv_start( probe, -1, -1, 0 ) == 0 )
-				{
-					int probe_fd = raw1394_get_fd( probe );
-					struct pollfd pfd = { probe_fd, POLLIN, 0 };
-					for ( int t = 0; t < 10; t++ )
-					{
-						int r = poll( &pfd, 1, 50 );
-						if ( r > 0 )
-							raw1394_loop_iterate( probe );
-					}
-					raw1394_iso_stop( probe );
-					raw1394_iso_shutdown( probe );
-					probePackets = counter;
-					if ( d_all )
-						fprintf( stderr, "  Probe: %d packets in 500ms\n",
-							counter );
-				}
-			}
-			raw1394_destroy_handle( probe );
+			probePackets = pd.count;
+			probeFn = pd.fn;
+			probeDbs = pd.dbs;
+			probeFdf = pd.fdf;
+			probeMaxLen = pd.maxLen;
+			if ( d_all )
+				fprintf( stderr, "  Channel %d: %d packets (negotiated)\n",
+					channel, pd.count );
 		}
-
-		if ( probePackets > 0 )
-			break;
 	}
+
+	// Phase 2: negotiated channel silent — sweep every channel once and
+	// lock onto wherever isochronous data is actually arriving.
+	if ( probePackets == 0 )
 	{
-		// Second probe pass to capture CIP details
-		if ( probePackets > 0 )
+		if ( d_all )
+			fprintf( stderr, "  Channel %d silent; sweeping all channels...\n",
+				channel );
+		for ( int ch = 0; ch < 64; ch++ )
 		{
-			struct CipProbeData {
-				int fn, dbs, fdf, maxLen, count;
-			} cipData = { -1, -1, -1, 0, 0 };
-
-			// Use a lambda-like static function
-			struct CipProbe {
-				static enum raw1394_iso_disposition handler(
-					raw1394handle_t h, unsigned char *d, unsigned int l,
-					unsigned char ch, unsigned char tg, unsigned char s,
-					unsigned int cy, unsigned int dr )
-				{
-					CipProbeData *cd = static_cast< CipProbeData* >(
-						raw1394_get_userdata( h ) );
-					if ( l > 8 && (int)l > cd->maxLen )
-						cd->maxLen = l;
-					if ( tg == 1 && l >= 8 && cd->fn < 0 )
-					{
-						cd->dbs = d[1];
-						cd->fn  = ( d[2] >> 6 ) & 0x3;
-						cd->fdf = d[5];
-					}
-					cd->count++;
-					return RAW1394_ISO_OK;
-				}
-			};
-
-			raw1394handle_t probe2 = raw1394_new_handle_on_port( m_port );
-			if ( probe2 )
+			if ( ch == channel )
+				continue;
+			if ( ChannelProbe::probe( m_port, ch, 60, &pd ) > 0 )
 			{
-				raw1394_set_userdata( probe2, &cipData );
-				if ( raw1394_iso_recv_init( probe2, CipProbe::handler,
-					64, 2048, channel, RAW1394_DMA_DEFAULT, -1 ) == 0 )
-				{
-					if ( raw1394_iso_recv_start( probe2, -1, -1, 0 ) == 0 )
-					{
-						int fd2 = raw1394_get_fd( probe2 );
-						struct pollfd pfd2 = { fd2, POLLIN, 0 };
-						for ( int t = 0; t < 4; t++ )
-						{
-							int r = poll( &pfd2, 1, 50 );
-							if ( r > 0 )
-								raw1394_loop_iterate( probe2 );
-						}
-						raw1394_iso_stop( probe2 );
-						raw1394_iso_shutdown( probe2 );
-					}
-				}
-				raw1394_destroy_handle( probe2 );
-				probeFn = cipData.fn;
-				probeDbs = cipData.dbs;
-				probeFdf = cipData.fdf;
-				probeMaxLen = cipData.maxLen;
 				if ( d_all )
-					fprintf( stderr, "  CIP: DBS=%d FN=%d FDF=0x%02x "
-						"max_pkt=%d\n", probeDbs, probeFn, probeFdf,
-						probeMaxLen );
+					fprintf( stderr, "  Found isochronous data on channel "
+						"%d (%d packets); switching from negotiated "
+						"channel %d\n", ch, pd.count, channel );
+				channel = ch;
+				probePackets = pd.count;
+				probeFn = pd.fn;
+				probeDbs = pd.dbs;
+				probeFdf = pd.fdf;
+				probeMaxLen = pd.maxLen;
+				break;
 			}
 		}
 	}
+
+	if ( d_all )
+		fprintf( stderr, "  Probe result: channel=%d packets=%d DBS=%d "
+			"FN=%d FDF=0x%02x max_pkt=%d\n", channel, probePackets,
+			probeDbs, probeFn, probeFdf, probeMaxLen );
 
 	/* Starting iso receive */
 	if ( d_all )

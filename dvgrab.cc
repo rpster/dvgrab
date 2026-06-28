@@ -558,6 +558,34 @@ void DVgrab::waitForRecordStart()
 
 void DVgrab::startCapture()
 {
+	// Normal capture (not -record-start, not interactive, not -rewind):
+	// the reader and its isochronous probe were started in the
+	// constructor, before the camera was told to play.  At that point the
+	// device was not yet streaming, so the probe could not see live data
+	// nor detect which channel the camera actually outputs on (on the
+	// firewire-core backend this often differs from the CMP-negotiated
+	// channel).  Tell the device to play and restart the reader so its
+	// probe runs against a live stream.  The -record-start, interactive
+	// and -rewind paths manage their own reader/transport lifecycle below.
+	if ( m_hdv && m_avc && !m_waitRecordStart && !m_interactive
+		&& !m_isRewindFirst && !m_hasCaptured && m_reader )
+	{
+		if ( !g_done )
+			m_avc->Play( m_node );
+		// Give the device time to begin isochronous output.
+		timespec t = {1, 500000000L};
+		nanosleep( &t, NULL );
+
+		m_reader_active = false;
+		m_reader->StopThread();
+		pthread_join( capture_thread, NULL );
+		delete m_reader;
+		m_reader = new iec61883Reader( m_port, m_channel, m_buffers,
+			this->testCaptureProxy, this, m_hdv );
+		pthread_create( &capture_thread, NULL, captureThread, this );
+		m_reader->StartThread();
+	}
+
 	// On re-arm (not the first capture), stop the old capture thread
 	// and restart the reader BEFORE creating the new writer.  This
 	// ensures the reader's format probe detects any format change
