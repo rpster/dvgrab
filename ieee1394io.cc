@@ -321,7 +321,8 @@ iec61883Reader::iec61883Reader( int p, int c, int bufSize,
 	m_handle = NULL;
 	m_iec61883_mpeg2 = NULL;
 	m_iec61883_dv = NULL;
-	m_framesSeen = 0;
+	m_hdvNeedStart = false;
+	m_mpeg2Started = false;
 	m_rawIsoMode = false;
 	m_rawIsoHandle = NULL;
 	m_rawIsoFrameBuf = NULL;
@@ -955,22 +956,22 @@ bool iec61883Reader::StartReceive()
 
 	if ( isHDV )
 	{
-		// HDV: do NOT block here probing.  The tape may not be rolling yet
-		// (StartReceive runs before the camera streams, and is also called
-		// from the constructor before AVC Play is even sent), and on the
-		// juju backend the camera often streams on a channel other than the
-		// negotiated one.  A one-shot probe here would either stall startup
-		// or lock onto the wrong channel and capture zero frames.
+		// HDV: do NOT probe or start receiving here.  The tape may not be
+		// rolling yet (StartReceive runs before the camera streams, and is
+		// also called from the constructor before AVC Play is even sent), and
+		// on the juju backend the camera often streams on a channel other
+		// than the negotiated one.  Crucially, that backend only reports the
+		// real channel reliably while NO iso receive context is active, so
+		// channel detection must happen before the MPEG2 receiver is started.
 		//
-		// Instead bind the negotiated channel now and let the receive thread
-		// (Thread()) re-probe and rebind the moment live data appears — see
-		// the re-detection block there.  This keeps startup instant and makes
-		// capture work whether the tape is already playing or only starts
-		// after dvgrab is armed.
+		// Defer both detection and start to the receive thread (Thread()),
+		// which probes for the live channel — with nothing receiving — until
+		// the stream appears, then starts the MPEG2 receiver there.  This
+		// makes capture work whether the tape is already playing or only
+		// starts after dvgrab is armed.
 		if ( d_all )
-			fprintf( stderr, "HDV: binding negotiated channel %d; the receive "
-				"thread will lock onto the live stream when data arrives\n",
-				channel );
+			fprintf( stderr, "HDV: deferring receive; the thread will locate "
+				"the live stream channel (negotiated %d)\n", channel );
 	}
 	else
 	{
@@ -1037,13 +1038,13 @@ bool iec61883Reader::StartReceive()
 		}
 	}
 
-	if ( d_all )
+	if ( d_all && !isHDV )
 		fprintf( stderr, "  Probe result: channel=%d packets=%d DBS=%d "
 			"FN=%d FDF=0x%02x max_pkt=%d\n", channel, probePackets,
 			probeDbs, probeFn, probeFdf, probeMaxLen );
 
-	/* Starting iso receive */
-	if ( d_all )
+	/* Starting iso receive (HDV defers this to the receive thread). */
+	if ( d_all && !isHDV )
 		fprintf( stderr, "Starting isochronous receive on channel %d\n", channel );
 
 	// Use raw iso mode for DVCPRO50+ (FN>0 means packets larger than
@@ -1134,12 +1135,24 @@ bool iec61883Reader::StartReceive()
 		try
 		{
 			if ( isHDV )
-				fail_neg( iec61883_mpeg2_recv_start( m_iec61883_mpeg2, channel ) );
+			{
+				// Defer the MPEG2 receive start to Thread() so channel
+				// detection runs with no active iso context (required for
+				// the juju backend to report the real channel).
+				m_hdvNeedStart = true;
+				success = true;
+				if ( d_all )
+					fprintf( stderr, "HDV: receive will start once the live "
+						"stream is located\n" );
+			}
 			else
+			{
 				fail_neg( iec61883_dv_fb_start( m_iec61883_dv, channel ) );
-			success = true;
-			if ( d_all )
-				fprintf( stderr, "Isochronous receive started successfully\n" );
+				success = true;
+				if ( d_all )
+					fprintf( stderr, "Isochronous receive started "
+						"successfully\n" );
+			}
 		}
 		catch ( string exc )
 		{
@@ -1163,9 +1176,13 @@ void iec61883Reader::StopReceive()
 	{
 		iec61883_dv_fb_stop( m_iec61883_dv );
 	}
-	else if ( m_iec61883_mpeg2 != NULL )
+	else if ( m_iec61883_mpeg2 != NULL && m_mpeg2Started )
 	{
+		// Only stop if Thread() actually started the receiver — for HDV the
+		// start is deferred and may not have happened (e.g. aborted while
+		// still waiting for the stream).
 		iec61883_mpeg2_recv_stop( m_iec61883_mpeg2 );
+		m_mpeg2Started = false;
 	}
 }
 
@@ -1189,9 +1206,6 @@ int iec61883Reader::Handler( unsigned char *data, int length, int dropped )
 	if ( d_all && handlerCalls == 0 )
 		fprintf( stderr, "First DV packet received: %d bytes\n", length );
 	handlerCalls++;
-	// Signals the receive thread that the stream is live on the bound
-	// channel, so it can stop re-probing for the HDV channel.
-	m_framesSeen++;
 
 	badFrames += dropped;
 
@@ -1288,18 +1302,51 @@ void* iec61883Reader::Thread()
 	raw1394_poll.fd = fd;
 	raw1394_poll.events = POLLIN | POLLERR | POLLHUP | POLLPRI;
 
-	// HDV channel re-detection.  StartReceive() binds the negotiated channel
-	// without probing, because the tape may not be rolling yet and the juju
-	// backend often streams on a different channel.  If no frames arrive on
-	// the bound channel, periodically re-probe and rebind libiec61883's MPEG2
-	// receiver to wherever the live stream actually is.  This is what makes
-	// HDV capture work when the tape starts *after* dvgrab is armed, and it
-	// locks on within a fraction of a second of playback beginning instead of
-	// requiring the tape to already be playing.  Only applies to the
-	// libiec61883 MPEG2 path (not raw-iso DVCPRO).
-	const bool hdvRedetect = isHDV && !m_rawIsoMode && m_iec61883_mpeg2;
-	struct timespec lastDetect;
-	clock_gettime( CLOCK_MONOTONIC, &lastDetect );
+	// HDV deferred start.  StartReceive() leaves the MPEG2 receiver unstarted
+	// (m_hdvNeedStart) so that channel detection runs here with NO iso receive
+	// context active — the only state in which the juju backend reliably
+	// reports the channel the camera is streaming on.  Probe until the stream
+	// appears (the tape may start after dvgrab is armed), then start receiving
+	// on that channel.  Abortable via isRunning / g_done.
+	if ( m_hdvNeedStart )
+	{
+		if ( d_all )
+			fprintf( stderr, "HDV: waiting for live isochronous stream "
+				"(negotiated channel %d)...\n", channel );
+
+		int found = -1;
+		while ( isRunning && !g_done )
+		{
+			found = findActiveHdvChannel( channel, true );
+			if ( found >= 0 )
+				break;
+			// Brief pause so we don't spin opening handles while idle.
+			timespec ts = { 0, 100000000L };
+			nanosleep( &ts, NULL );
+		}
+
+		if ( !isRunning || g_done || found < 0 )
+			return NULL;
+
+		if ( d_all && found != channel )
+			fprintf( stderr, "HDV stream found on channel %d "
+				"(negotiated was %d)\n", found, channel );
+		channel = found;
+
+		if ( iec61883_mpeg2_recv_start( m_iec61883_mpeg2, channel ) < 0 )
+		{
+			fprintf( stderr, "Failed to start HDV receive on channel %d\n",
+				channel );
+			return NULL;
+		}
+		m_mpeg2Started = true;
+		// recv_start may re-init the iso context and reset fd flags;
+		// re-assert non-blocking so loop_iterate never blocks.
+		if ( flags >= 0 )
+			fcntl( fd, F_SETFL, flags | O_NONBLOCK );
+		if ( d_all )
+			fprintf( stderr, "Started HDV receive on channel %d\n", channel );
+	}
 
 	while ( isRunning )
 	{
@@ -1312,38 +1359,6 @@ void* iec61883Reader::Thread()
 		}
 
 		raw1394_loop_iterate( iterHandle );
-
-		if ( hdvRedetect && m_framesSeen == 0 )
-		{
-			struct timespec now;
-			clock_gettime( CLOCK_MONOTONIC, &now );
-			long elapsedMs = ( now.tv_sec - lastDetect.tv_sec ) * 1000
-				+ ( now.tv_nsec - lastDetect.tv_nsec ) / 1000000;
-			if ( elapsedMs >= 500 )
-			{
-				// Nothing on the bound channel yet.  Stop the MPEG2 receiver
-				// (it frees its iso context so the probe can use one), sweep
-				// for the live channel, and rebind there.  If still nothing is
-				// streaming, rebind the same channel and try again next pass.
-				// The stop/start are kept strictly paired so StopReceive()'s
-				// later stop stays balanced.
-				iec61883_mpeg2_recv_stop( m_iec61883_mpeg2 );
-				int found = findActiveHdvChannel( channel, true );
-				if ( found >= 0 && found != channel )
-				{
-					if ( d_all )
-						fprintf( stderr, "HDV stream found on channel %d; "
-							"rebinding from %d\n", found, channel );
-					channel = found;
-				}
-				iec61883_mpeg2_recv_start( m_iec61883_mpeg2, channel );
-				// recv_start may re-init the iso context and reset fd flags;
-				// re-assert non-blocking so loop_iterate never blocks.
-				if ( flags >= 0 )
-					fcntl( fd, F_SETFL, flags | O_NONBLOCK );
-				clock_gettime( CLOCK_MONOTONIC, &lastDetect );
-			}
-		}
 	}
 
 	// Restore blocking mode

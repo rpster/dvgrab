@@ -130,10 +130,17 @@ private:
 	BusResetHandler m_resetHandler;
 	const void* m_resetHandlerData;
 
-	/// Number of payload packets handed to Handler() so far.  Used by the
-	/// receive thread to tell whether the HDV stream is actually arriving on
-	/// the channel we bound to, and to drive re-detection until it is.
-	volatile int m_framesSeen;
+	/// HDV only: StartReceive() defers starting the MPEG2 receiver to the
+	/// receive thread, which first locates the channel the camera is actually
+	/// streaming on (the juju backend only reports it reliably while no iso
+	/// receive context is active).  Set true by StartReceive when an HDV
+	/// stream start is pending.
+	bool m_hdvNeedStart;
+
+	/// Whether iec61883_mpeg2_recv_start() has been called and not yet
+	/// stopped, so StopReceive() only stops a receiver that was actually
+	/// started (the HDV start now happens lazily in the thread).
+	bool m_mpeg2Started;
 
 	/// Raw iso receive mode (bypasses libiec61883 DV frame buffer)
 	bool m_rawIsoMode;
