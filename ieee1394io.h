@@ -130,6 +130,11 @@ private:
 	BusResetHandler m_resetHandler;
 	const void* m_resetHandlerData;
 
+	/// Number of payload packets handed to Handler() so far.  Used by the
+	/// receive thread to tell whether the HDV stream is actually arriving on
+	/// the channel we bound to, and to drive re-detection until it is.
+	volatile int m_framesSeen;
+
 	/// Raw iso receive mode (bypasses libiec61883 DV frame buffer)
 	bool m_rawIsoMode;
 	raw1394handle_t m_rawIsoHandle;
@@ -156,6 +161,9 @@ public:
 	int Handler( unsigned char *data, int length, int dropped );
 	void *Thread();
 	void ResetHandler( void );
+	/// Probe for the iso channel an HDV device is streaming on; returns the
+	/// active channel or -1 if none is streaming yet.  See ieee1394io.cc.
+	int findActiveHdvChannel( int preferred, bool checkRunning );
 
 private:
 	static int ResetHandlerProxy( raw1394handle_t handle, unsigned int generation );

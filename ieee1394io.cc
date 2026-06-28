@@ -62,6 +62,7 @@ using std::endl;
 #include <sys/mman.h>
 #include <sys/poll.h>
 #include <errno.h>
+#include <signal.h>
 #include <time.h>
 #include <sys/time.h>
 #include <string.h>
@@ -75,6 +76,11 @@ using std::endl;
 #include "dvframe.h"
 #include "hdvframe.h"
 #include "error.h"
+
+/// Set asynchronously by the main.cc signal handler on Ctrl-C / shutdown.
+/// Used here so the HDV channel-detection wait can be interrupted while it
+/// is blocked waiting for the tape to start streaming.
+extern volatile sig_atomic_t g_done;
 
 /** Initializes the IEEE1394Reader object.
  
@@ -315,6 +321,7 @@ iec61883Reader::iec61883Reader( int p, int c, int bufSize,
 	m_handle = NULL;
 	m_iec61883_mpeg2 = NULL;
 	m_iec61883_dv = NULL;
+	m_framesSeen = 0;
 	m_rawIsoMode = false;
 	m_rawIsoHandle = NULL;
 	m_rawIsoFrameBuf = NULL;
@@ -829,82 +836,113 @@ iec61883Reader::RawDvIsoHandler( raw1394handle_t handle, unsigned char *data,
 	return RAW1394_ISO_OK;
 }
 
+// Lightweight single-channel isochronous probe, used both to detect the
+// channel/format at StartReceive() time and to re-detect the live HDV channel
+// from the receive thread (see iec61883Reader::findActiveHdvChannel).  Lifted
+// to file scope so both callers can share it.
+namespace {
+
+struct IsoProbeData {
+	int fn, dbs, fdf, maxLen, count;
+};
+
+enum raw1394_iso_disposition isoProbeHandler(
+	raw1394handle_t h, unsigned char *d, unsigned int l,
+	unsigned char ch, unsigned char tg, unsigned char s,
+	unsigned int cy, unsigned int dr )
+{
+	IsoProbeData *pd = static_cast< IsoProbeData* >(
+		raw1394_get_userdata( h ) );
+	// Only count packets with actual payload, not empty CIP headers.
+	if ( l > 8 )
+	{
+		pd->count++;
+		if ( (int)l > pd->maxLen )
+			pd->maxLen = l;
+		if ( tg == 1 && pd->fn < 0 )
+		{
+			pd->dbs = d[1];
+			pd->fn  = ( d[2] >> 6 ) & 0x3;
+			pd->fdf = d[5];
+		}
+	}
+	return RAW1394_ISO_OK;
+}
+
+// Probe a single channel for roughly durationMs; returns the number of
+// payload-bearing packets seen and fills pd.
+int isoProbeChannel( int port, int ch, int durationMs, IsoProbeData *pd )
+{
+	pd->fn = pd->dbs = pd->fdf = -1;
+	pd->maxLen = 0;
+	pd->count = 0;
+	raw1394handle_t h = raw1394_new_handle_on_port( port );
+	if ( !h )
+		return 0;
+	raw1394_set_userdata( h, pd );
+	if ( raw1394_iso_recv_init( h, isoProbeHandler, 64, 2048, ch,
+		RAW1394_DMA_DEFAULT, -1 ) == 0 )
+	{
+		if ( raw1394_iso_recv_start( h, -1, -1, 0 ) == 0 )
+		{
+			int fd = raw1394_get_fd( h );
+			struct pollfd pfd = { fd, POLLIN, 0 };
+			// Poll in fine slices and bail out the instant a payload packet
+			// arrives, so probing the channel the device is actually
+			// streaming on returns immediately rather than dwelling for the
+			// full duration.  Silent channels still cost up to durationMs
+			// (one slice of poll timeout per iteration).
+			const int pollMs = 20;
+			int iters = durationMs / pollMs;
+			if ( iters < 1 )
+				iters = 1;
+			for ( int t = 0; t < iters && pd->count == 0; t++ )
+			{
+				if ( poll( &pfd, 1, pollMs ) > 0 )
+					raw1394_loop_iterate( h );
+			}
+			raw1394_iso_stop( h );
+			raw1394_iso_shutdown( h );
+		}
+	}
+	raw1394_destroy_handle( h );
+	return pd->count;
+}
+
+} // namespace
+
+/** Find the iso channel an HDV device is actually streaming on.
+
+    Probes the preferred (CMP-negotiated) channel first, then sweeps the rest.
+    Returns the channel carrying live payload data, or -1 if none is streaming
+    yet.  Aborts early on g_done, and (when checkRunning is set, i.e. when
+    called from the receive thread) on isRunning going false, so StopThread
+    isn't blocked for a full sweep.
+*/
+int iec61883Reader::findActiveHdvChannel( int preferred, bool checkRunning )
+{
+	IsoProbeData pd;
+	if ( g_done || ( checkRunning && !isRunning ) )
+		return -1;
+	// Favour the negotiated channel (longer dwell): on OHCI it is normally
+	// correct, so an already-rolling tape there is caught immediately.
+	if ( isoProbeChannel( m_port, preferred, 200, &pd ) > 0 )
+		return preferred;
+	for ( int ch = 0; ch < 64; ch++ )
+	{
+		if ( g_done || ( checkRunning && !isRunning ) )
+			break;
+		if ( ch == preferred )
+			continue;
+		if ( isoProbeChannel( m_port, ch, 20, &pd ) > 0 )
+			return ch;
+	}
+	return -1;
+}
+
 bool iec61883Reader::StartReceive()
 {
 	bool success;
-
-	// Probe for isochronous data and detect stream parameters.
-	//
-	// On the firewire-core (juju) backend the CMP channel negotiation
-	// often fails to reconfigure the camera, which then streams on its
-	// broadcast channel (typically 63) rather than the channel we
-	// negotiated.  Probing only the negotiated channel therefore sees no
-	// data at all (the classic "0 packets" / no-frames symptom for HDV).
-	//
-	// So probe the negotiated channel first, and if it is silent, sweep
-	// every channel and lock onto wherever isochronous data is actually
-	// arriving.  Retry the whole pass a few times since the device may
-	// need a moment to start isochronous output after being told to play.
-	struct ProbeData {
-		int fn, dbs, fdf, maxLen, count;
-	};
-	struct ChannelProbe {
-		static enum raw1394_iso_disposition handler(
-			raw1394handle_t h, unsigned char *d, unsigned int l,
-			unsigned char ch, unsigned char tg, unsigned char s,
-			unsigned int cy, unsigned int dr )
-		{
-			ProbeData *pd = static_cast< ProbeData* >(
-				raw1394_get_userdata( h ) );
-			// Only count packets with actual payload, not empty CIP headers.
-			if ( l > 8 )
-			{
-				pd->count++;
-				if ( (int)l > pd->maxLen )
-					pd->maxLen = l;
-				if ( tg == 1 && pd->fn < 0 )
-				{
-					pd->dbs = d[1];
-					pd->fn  = ( d[2] >> 6 ) & 0x3;
-					pd->fdf = d[5];
-				}
-			}
-			return RAW1394_ISO_OK;
-		}
-		// Probe a single channel for roughly durationMs; returns the
-		// number of payload-bearing packets seen and fills pd.
-		static int probe( int port, int ch, int durationMs, ProbeData *pd )
-		{
-			pd->fn = pd->dbs = pd->fdf = -1;
-			pd->maxLen = 0;
-			pd->count = 0;
-			raw1394handle_t h = raw1394_new_handle_on_port( port );
-			if ( !h )
-				return 0;
-			raw1394_set_userdata( h, pd );
-			if ( raw1394_iso_recv_init( h, handler, 64, 2048, ch,
-				RAW1394_DMA_DEFAULT, -1 ) == 0 )
-			{
-				if ( raw1394_iso_recv_start( h, -1, -1, 0 ) == 0 )
-				{
-					int fd = raw1394_get_fd( h );
-					struct pollfd pfd = { fd, POLLIN, 0 };
-					int iters = durationMs / 50;
-					if ( iters < 1 )
-						iters = 1;
-					for ( int t = 0; t < iters; t++ )
-					{
-						if ( poll( &pfd, 1, 50 ) > 0 )
-							raw1394_loop_iterate( h );
-					}
-					raw1394_iso_stop( h );
-					raw1394_iso_shutdown( h );
-				}
-			}
-			raw1394_destroy_handle( h );
-			return pd->count;
-		}
-	};
 
 	int probeFn = -1;
 	int probeDbs = -1;
@@ -912,61 +950,89 @@ bool iec61883Reader::StartReceive()
 	int probePackets = 0;
 	int probeMaxLen = 0;
 
-	if ( d_all )
-		fprintf( stderr, "Probing for isochronous data (negotiated channel "
-			"%d)...\n", channel );
+	IsoProbeData pd;
+	pd.count = 0;
 
-	ProbeData pd;
-
-	// Phase 1: retry the negotiated channel a few times, since the device
-	// may need a moment to start isochronous output.
-	for ( int attempt = 0; attempt < 3 && probePackets == 0; attempt++ )
+	if ( isHDV )
 	{
-		if ( attempt > 0 )
-		{
-			if ( d_all )
-				fprintf( stderr, "  Retrying negotiated channel (attempt "
-					"%d)...\n", attempt + 1 );
-			timespec t = {0, 500000000L};
-			nanosleep( &t, NULL );
-		}
-		if ( ChannelProbe::probe( m_port, channel, 500, &pd ) > 0 )
-		{
-			probePackets = pd.count;
-			probeFn = pd.fn;
-			probeDbs = pd.dbs;
-			probeFdf = pd.fdf;
-			probeMaxLen = pd.maxLen;
-			if ( d_all )
-				fprintf( stderr, "  Channel %d: %d packets (negotiated)\n",
-					channel, pd.count );
-		}
+		// HDV: do NOT block here probing.  The tape may not be rolling yet
+		// (StartReceive runs before the camera streams, and is also called
+		// from the constructor before AVC Play is even sent), and on the
+		// juju backend the camera often streams on a channel other than the
+		// negotiated one.  A one-shot probe here would either stall startup
+		// or lock onto the wrong channel and capture zero frames.
+		//
+		// Instead bind the negotiated channel now and let the receive thread
+		// (Thread()) re-probe and rebind the moment live data appears — see
+		// the re-detection block there.  This keeps startup instant and makes
+		// capture work whether the tape is already playing or only starts
+		// after dvgrab is armed.
+		if ( d_all )
+			fprintf( stderr, "HDV: binding negotiated channel %d; the receive "
+				"thread will lock onto the live stream when data arrives\n",
+				channel );
 	}
-
-	// Phase 2: negotiated channel silent — sweep every channel once and
-	// lock onto wherever isochronous data is actually arriving.
-	if ( probePackets == 0 )
+	else
 	{
 		if ( d_all )
-			fprintf( stderr, "  Channel %d silent; sweeping all channels...\n",
-				channel );
-		for ( int ch = 0; ch < 64; ch++ )
+			fprintf( stderr, "Probing for isochronous data (negotiated channel "
+				"%d)...\n", channel );
+
+		// DV / DVCPRO: probe once.  These formats are captured the moment
+		// the device streams and the negotiated channel is normally
+		// correct, so the original single-pass detection is retained to
+		// avoid changing proven behaviour.
+		//
+		// Phase 1: retry the negotiated channel a few times, since the
+		// device may need a moment to start isochronous output.
+		for ( int attempt = 0; attempt < 3 && probePackets == 0; attempt++ )
 		{
-			if ( ch == channel )
-				continue;
-			if ( ChannelProbe::probe( m_port, ch, 60, &pd ) > 0 )
+			if ( attempt > 0 )
 			{
 				if ( d_all )
-					fprintf( stderr, "  Found isochronous data on channel "
-						"%d (%d packets); switching from negotiated "
-						"channel %d\n", ch, pd.count, channel );
-				channel = ch;
+					fprintf( stderr, "  Retrying negotiated channel (attempt "
+						"%d)...\n", attempt + 1 );
+				timespec t = {0, 500000000L};
+				nanosleep( &t, NULL );
+			}
+			if ( isoProbeChannel( m_port, channel, 500, &pd ) > 0 )
+			{
 				probePackets = pd.count;
 				probeFn = pd.fn;
 				probeDbs = pd.dbs;
 				probeFdf = pd.fdf;
 				probeMaxLen = pd.maxLen;
-				break;
+				if ( d_all )
+					fprintf( stderr, "  Channel %d: %d packets (negotiated)\n",
+						channel, pd.count );
+			}
+		}
+
+		// Phase 2: negotiated channel silent — sweep every channel once and
+		// lock onto wherever isochronous data is actually arriving.
+		if ( probePackets == 0 )
+		{
+			if ( d_all )
+				fprintf( stderr, "  Channel %d silent; sweeping all channels...\n",
+					channel );
+			for ( int ch = 0; ch < 64; ch++ )
+			{
+				if ( ch == channel )
+					continue;
+				if ( isoProbeChannel( m_port, ch, 60, &pd ) > 0 )
+				{
+					if ( d_all )
+						fprintf( stderr, "  Found isochronous data on channel "
+							"%d (%d packets); switching from negotiated "
+							"channel %d\n", ch, pd.count, channel );
+					channel = ch;
+					probePackets = pd.count;
+					probeFn = pd.fn;
+					probeDbs = pd.dbs;
+					probeFdf = pd.fdf;
+					probeMaxLen = pd.maxLen;
+					break;
+				}
 			}
 		}
 	}
@@ -1123,6 +1189,9 @@ int iec61883Reader::Handler( unsigned char *data, int length, int dropped )
 	if ( d_all && handlerCalls == 0 )
 		fprintf( stderr, "First DV packet received: %d bytes\n", length );
 	handlerCalls++;
+	// Signals the receive thread that the stream is live on the bound
+	// channel, so it can stop re-probing for the HDV channel.
+	m_framesSeen++;
 
 	badFrames += dropped;
 
@@ -1219,6 +1288,19 @@ void* iec61883Reader::Thread()
 	raw1394_poll.fd = fd;
 	raw1394_poll.events = POLLIN | POLLERR | POLLHUP | POLLPRI;
 
+	// HDV channel re-detection.  StartReceive() binds the negotiated channel
+	// without probing, because the tape may not be rolling yet and the juju
+	// backend often streams on a different channel.  If no frames arrive on
+	// the bound channel, periodically re-probe and rebind libiec61883's MPEG2
+	// receiver to wherever the live stream actually is.  This is what makes
+	// HDV capture work when the tape starts *after* dvgrab is armed, and it
+	// locks on within a fraction of a second of playback beginning instead of
+	// requiring the tape to already be playing.  Only applies to the
+	// libiec61883 MPEG2 path (not raw-iso DVCPRO).
+	const bool hdvRedetect = isHDV && !m_rawIsoMode && m_iec61883_mpeg2;
+	struct timespec lastDetect;
+	clock_gettime( CLOCK_MONOTONIC, &lastDetect );
+
 	while ( isRunning )
 	{
 		int result = poll( &raw1394_poll, 1, 20 );
@@ -1230,6 +1312,38 @@ void* iec61883Reader::Thread()
 		}
 
 		raw1394_loop_iterate( iterHandle );
+
+		if ( hdvRedetect && m_framesSeen == 0 )
+		{
+			struct timespec now;
+			clock_gettime( CLOCK_MONOTONIC, &now );
+			long elapsedMs = ( now.tv_sec - lastDetect.tv_sec ) * 1000
+				+ ( now.tv_nsec - lastDetect.tv_nsec ) / 1000000;
+			if ( elapsedMs >= 500 )
+			{
+				// Nothing on the bound channel yet.  Stop the MPEG2 receiver
+				// (it frees its iso context so the probe can use one), sweep
+				// for the live channel, and rebind there.  If still nothing is
+				// streaming, rebind the same channel and try again next pass.
+				// The stop/start are kept strictly paired so StopReceive()'s
+				// later stop stays balanced.
+				iec61883_mpeg2_recv_stop( m_iec61883_mpeg2 );
+				int found = findActiveHdvChannel( channel, true );
+				if ( found >= 0 && found != channel )
+				{
+					if ( d_all )
+						fprintf( stderr, "HDV stream found on channel %d; "
+							"rebinding from %d\n", found, channel );
+					channel = found;
+				}
+				iec61883_mpeg2_recv_start( m_iec61883_mpeg2, channel );
+				// recv_start may re-init the iso context and reset fd flags;
+				// re-assert non-blocking so loop_iterate never blocks.
+				if ( flags >= 0 )
+					fcntl( fd, F_SETFL, flags | O_NONBLOCK );
+				clock_gettime( CLOCK_MONOTONIC, &lastDetect );
+			}
+		}
 	}
 
 	// Restore blocking mode

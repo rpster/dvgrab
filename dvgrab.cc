@@ -572,9 +572,11 @@ void DVgrab::startCapture()
 	{
 		if ( !g_done )
 			m_avc->Play( m_node );
-		// Give the device time to begin isochronous output.
-		timespec t = {1, 500000000L};
-		nanosleep( &t, NULL );
+		// No fixed settle delay here: the reader's HDV channel detection
+		// now waits for live isochronous data itself and locks on the
+		// instant the device starts streaming, so capture begins as soon
+		// as data flows (whether the tape is already rolling or only
+		// starts after Play takes effect) instead of after a fixed delay.
 
 		m_reader_active = false;
 		m_reader->StopThread();
