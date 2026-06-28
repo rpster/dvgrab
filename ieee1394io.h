@@ -130,6 +130,18 @@ private:
 	BusResetHandler m_resetHandler;
 	const void* m_resetHandlerData;
 
+	/// HDV only: StartReceive() defers starting the MPEG2 receiver to the
+	/// receive thread, which first locates the channel the camera is actually
+	/// streaming on (the juju backend only reports it reliably while no iso
+	/// receive context is active).  Set true by StartReceive when an HDV
+	/// stream start is pending.
+	bool m_hdvNeedStart;
+
+	/// Whether iec61883_mpeg2_recv_start() has been called and not yet
+	/// stopped, so StopReceive() only stops a receiver that was actually
+	/// started (the HDV start now happens lazily in the thread).
+	bool m_mpeg2Started;
+
 	/// Raw iso receive mode (bypasses libiec61883 DV frame buffer)
 	bool m_rawIsoMode;
 	raw1394handle_t m_rawIsoHandle;
@@ -156,6 +168,9 @@ public:
 	int Handler( unsigned char *data, int length, int dropped );
 	void *Thread();
 	void ResetHandler( void );
+	/// Probe for the iso channel an HDV device is streaming on; returns the
+	/// active channel or -1 if none is streaming yet.  See ieee1394io.cc.
+	int findActiveHdvChannel( int preferred, bool checkRunning );
 
 private:
 	static int ResetHandlerProxy( raw1394handle_t handle, unsigned int generation );
